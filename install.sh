@@ -12,6 +12,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # Function to find the project root (where Cargo.toml lives)
+# Returns empty string if not found
 find_project_root() {
     local current_dir
     current_dir="$(pwd)"
@@ -34,7 +35,7 @@ find_project_root() {
         parent_dir="$(dirname "$current_dir")"
     done
     
-    # Not found
+    # Not found - return nothing
     return 1
 }
 
@@ -46,7 +47,7 @@ if [[ -z "$PROJECT_ROOT" ]] || [[ ! -f "$PROJECT_ROOT/Cargo.toml" ]]; then
     log_info "Project not found locally. Cloning from GitHub..."
     TEMP_DIR="$(mktemp -d)"
     cd "$TEMP_DIR"
-    git clone https://github.com/Orangericce/mouse2joy.git
+    git clone --depth 1 https://github.com/Orangericce/mouse2joy.git
     PROJECT_ROOT="$TEMP_DIR/mouse2joy"
     cd "$PROJECT_ROOT"
     log_info "Cloned to $PROJECT_ROOT"
