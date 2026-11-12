@@ -1,0 +1,38 @@
+# Rust
+/target/
+Cargo.lock
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Config files
+*.pem
+*.key
+
+# System temporary files
+*.tmp
+*.temp
+
+# Logs
+*.log
+
+# Downloaded packages (if any)
+*.deb
+*.rpm
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# User‑specific config (outside repo)
+~/.config/mouse2joy/config.toml
+
+# Audio files (generated at runtime)
+audio/*.wav
+
+# Documentation artifacts
+doc/html/
+book/

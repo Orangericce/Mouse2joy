@@ -1,0 +1,39 @@
+[package]
+name = "mouse2joy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# UI framework
+rune = { git = "https://github.com/anomalyco/rune", rev = "71fcd21d677c96bfbba52cb92b4ceb9de55a0b2f" }
+rune-widgets = { git = "https://github.com/anomalyco/rune", rev = "71fcd21d677c96bfbba52cb92b4ceb9de55a0b2f" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "71fcd21d677c96bfbba52cb92b4ceb9de55a0b2f" }
+
+# Optional dependencies for CLI (if needed)
+anyhow = "1.0"
+dirs = "5"
+
+# Device handling
+dirs = "5"
+evdev = "0.6"
+udev = "0.7"
+
+# Virtual joystick
+uinput = "0.5"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Configuration (TOML)
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Audio cues
+rodio = "0.17"
+
+# System tray
+notify-rust = "4.5"
+
+# Logging (optional)
+log = "0.4"
+env_logger = "0.10"
