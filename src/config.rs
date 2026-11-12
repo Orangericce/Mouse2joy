@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::Config;
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub device_path: Option<String>,
