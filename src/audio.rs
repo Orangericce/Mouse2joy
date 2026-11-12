@@ -1,4 +1,5 @@
 use rodio::{OutputStream, Sink, source::SineWave};
+use rodio::source::Source;
 use std::time::Duration;
 
 pub struct AudioPlayer {
@@ -14,17 +15,17 @@ impl AudioPlayer {
     }
 
     /// Play a short tone. `freq` in Hz, `ms` duration.
-    pub fn play_tone(&self, freq: u32, ms: u64) {
+    pub fn play_tone(&self, freq: f32, ms: u64) {
         let source = SineWave::new(freq).take_duration(Duration::from_millis(ms)).amplify(0.25);
         self.sink.append(source);
     }
 
     /// Convenience wrappers for grab / release sounds.
     pub fn play_grab(&self) {
-        self.play_tone(800, 150);
+        self.play_tone(800.0, 150);
     }
 
     pub fn play_release(&self) {
-        self.play_tone(400, 150);
+        self.play_tone(400.0, 150);
     }
 }

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
+# Determine the directory where this script lives and cd there
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
 cargo build --release
 
 # Install binary
