@@ -25,8 +25,14 @@ async fn main() -> anyhow::Result<()> {
         device_manager::run_device_watcher(dm_state).await;
     });
 
-    // Start the UI (Rune)
-    ui::run_ui(app_state).await?;
+    // Extract initial state for UI (while we have a runtime)
+    let initial_state = {
+        let state = app_state.lock().await;
+        state.clone()
+    };
+
+    // Start the UI (Rune) - runs synchronously, blocks this thread
+    ui::run_ui(initial_state)?;
 
     Ok(())
 }

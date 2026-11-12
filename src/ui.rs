@@ -2,8 +2,7 @@ use rune::{
     AppSpec, Color, Cx, El, KeyEvent, Key, TextStyle, Tx, Shadow,
     col, el, row, text,
 };
-use std::sync::{Arc, OnceLock};
-use tokio::sync::Mutex;
+use crate::state::AppState;
 
 // Text styles
 const TITLE_STYLE: TextStyle = TextStyle::new(16.0, 600.0);
@@ -21,8 +20,6 @@ pub struct UiState {
     pub release_audio_enabled: bool,
     pub system_tray_enabled: bool,
     pub device_path: Option<String>,
-    // Internal: whether we've synced from shared state
-    pub synced: bool,
 }
 
 impl Default for UiState {
@@ -36,35 +33,34 @@ impl Default for UiState {
             release_audio_enabled: true,
             system_tray_enabled: false,
             device_path: None,
-            synced: false,
+        }
+    }
+}
+
+impl From<AppState> for UiState {
+    fn from(state: AppState) -> Self {
+        UiState {
+            sensitivity_x: state.sensitivity_x,
+            sensitivity_y: state.sensitivity_y,
+            deadzone: state.deadzone,
+            trigger_button: state.trigger_button,
+            grab_audio_enabled: state.audio_enabled,
+            release_audio_enabled: state.audio_enabled,
+            system_tray_enabled: state.minimize_to_tray,
+            device_path: state.device_path,
         }
     }
 }
 
 // Global holder for initial state (since init must be fn())
-static INITIAL_STATE: OnceLock<UiState> = OnceLock::new();
+static INITIAL_STATE: std::sync::OnceLock<UiState> = std::sync::OnceLock::new();
 
-pub async fn run_ui(shared_state: Arc<Mutex<crate::state::AppState>>) -> anyhow::Result<()> {
+pub fn run_ui(initial_state: AppState) -> anyhow::Result<()> {
     log::info!("Starting mouse2joy UI...");
 
-    // Initialize UI state from shared state
-    let initial_state = {
-        let state = shared_state.blocking_lock();
-        UiState {
-            sensitivity_x: state.sensitivity_x,
-            sensitivity_y: state.sensitivity_y,
-            deadzone: state.deadzone,
-            trigger_button: state.trigger_button.clone(),
-            grab_audio_enabled: state.audio_enabled,
-            release_audio_enabled: state.audio_enabled,
-            system_tray_enabled: state.minimize_to_tray,
-            device_path: state.device_path.clone(),
-            synced: false,
-        }
-    };
-
-    // Store in global for the init fn
-    let _ = INITIAL_STATE.set(initial_state.clone());
+    // Convert to UI state and store in global for the init fn
+    let ui_state: UiState = initial_state.into();
+    let _ = INITIAL_STATE.set(ui_state.clone());
 
     let spec = AppSpec::<UiState> {
         scenes: &[],
@@ -152,8 +148,8 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
     );
 
     // Import/Export buttons
-    let import_btn = create_button("Import Config", panel_bg, panel_border, text_primary, accent);
-    let export_btn = create_button("Export Config", panel_bg, panel_border, text_primary, accent);
+    let import_btn = create_button("Import Config", text_primary);
+    let export_btn = create_button("Export Config", text_primary);
 
     // Main layout
     col()
@@ -397,8 +393,8 @@ fn create_toggle(
     text_secondary: Color,
     toggle_on: Color,
     toggle_off: Color,
-    panel_bg: Color,
-    panel_border: Color,
+    _panel_bg: Color,
+    _panel_border: Color,
 ) -> El {
     let (track_color, thumb_x) = if enabled {
         (toggle_on, 28.0)
@@ -431,11 +427,10 @@ fn create_toggle(
 
 fn create_button(
     label: &str,
-    panel_bg: Color,
-    panel_border: Color,
     text_primary: Color,
-    _accent: Color,
 ) -> El {
+    let panel_bg = Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 };
+    let panel_border = Color { r: 0.18, g: 0.18, b: 0.22, a: 1.0 };
     row()
         .w_full()
         .h(36.0)
