@@ -1,12 +1,14 @@
 use rune::{
-    AppSpec, Color, Cx, El, KeyEvent, Key, TextStyle, Tx, Shadow,
+    AppSpec, Color, Cx, Drag, El, KeyEvent, Key, TextStyle, Tx, Shadow,
     col, el, row, text,
 };
 use crate::state::AppState;
+use crate::config::Config;
+use std::sync::OnceLock;
 
 // Text styles
-const TITLE_STYLE: TextStyle = TextStyle::new(16.0, 600.0);
-const LABEL_STYLE: TextStyle = TextStyle::new(13.0, 500.0);
+const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
+const LABEL_STYLE: TextStyle = TextStyle::new(12.0, 500.0);
 const VALUE_STYLE: TextStyle = TextStyle::new(12.0, 450.0);
 const SMALL_STYLE: TextStyle = TextStyle::new(11.0, 400.0);
 
@@ -20,6 +22,8 @@ pub struct UiState {
     pub release_audio_enabled: bool,
     pub system_tray_enabled: bool,
     pub device_path: Option<String>,
+    pub device_list: Vec<String>,
+    pub trigger_listening: bool,
 }
 
 impl Default for UiState {
@@ -33,6 +37,8 @@ impl Default for UiState {
             release_audio_enabled: true,
             system_tray_enabled: false,
             device_path: None,
+            device_list: Vec::new(),
+            trigger_listening: false,
         }
     }
 }
@@ -48,18 +54,22 @@ impl From<AppState> for UiState {
             release_audio_enabled: state.audio_enabled,
             system_tray_enabled: state.minimize_to_tray,
             device_path: state.device_path,
+            device_list: Vec::new(),
+            trigger_listening: false,
         }
     }
 }
 
 // Global holder for initial state (since init must be fn())
-static INITIAL_STATE: std::sync::OnceLock<UiState> = std::sync::OnceLock::new();
+static INITIAL_STATE: OnceLock<UiState> = OnceLock::new();
 
 pub fn run_ui(initial_state: AppState) -> anyhow::Result<()> {
     log::info!("Starting mouse2joy UI...");
 
     // Convert to UI state and store in global for the init fn
-    let ui_state: UiState = initial_state.into();
+    let mut ui_state: UiState = initial_state.into();
+    // Populate device list
+    ui_state.device_list = enumerate_mice();
     let _ = INITIAL_STATE.set(ui_state.clone());
 
     let spec = AppSpec::<UiState> {
@@ -80,146 +90,116 @@ fn ui_init() -> UiState {
 }
 
 fn poll_shared_state(_state: &mut UiState, now: f64, _tx: &mut Tx) -> bool {
-    // Keep the UI running
     now > 0.0
 }
 
-fn on_key(_state: &mut UiState, event: &KeyEvent, _tx: &mut Tx) -> bool {
-    match &event.key {
-        Key::Escape => {
-            // Could trigger app quit here
-            false
+fn on_key(state: &mut UiState, event: &KeyEvent, _tx: &mut Tx) -> bool {
+    if state.trigger_listening {
+        match &event.key {
+            Key::Text(t) if !t.is_empty() => {
+                state.trigger_button = t.to_uppercase();
+                state.trigger_listening = false;
+                true
+            }
+            Key::Escape => {
+                state.trigger_listening = false;
+                true
+            }
+            _ => false,
         }
-        _ => false,
+    } else {
+        false
     }
 }
 
 fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
-    // Dark theme colors
-    let bg = Color { r: 0.05, g: 0.05, b: 0.05, a: 1.0 };
-    let panel_bg = Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 };
-    let panel_border = Color { r: 0.18, g: 0.18, b: 0.22, a: 1.0 };
+    // Pure black background
+    let bg = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+    let panel_bg = Color { r: 0.07, g: 0.07, b: 0.07, a: 1.0 };
+    let panel_border = Color { r: 0.15, g: 0.15, b: 0.15, a: 1.0 };
     let accent = Color { r: 0.35, g: 0.55, b: 1.0, a: 1.0 };
-    let text_primary = Color { r: 0.92, g: 0.93, b: 0.95, a: 1.0 };
+    let text_primary = Color { r: 0.95, g: 0.95, b: 0.95, a: 1.0 };
     let text_secondary = Color { r: 0.6, g: 0.6, b: 0.65, a: 1.0 };
-    let slider_track = Color { r: 0.15, g: 0.15, b: 0.2, a: 1.0 };
+    let slider_track = Color { r: 0.12, g: 0.12, b: 0.15, a: 1.0 };
     let slider_knob = Color::WHITE;
     let toggle_on = accent;
-    let toggle_off = Color { r: 0.3, g: 0.3, b: 0.35, a: 1.0 };
+    let toggle_off = Color { r: 0.25, g: 0.25, b: 0.3, a: 1.0 };
 
-    // Joystick indicator canvas (top-left)
-    let joystick_canvas = create_joystick_canvas(panel_bg, panel_border, accent, text_secondary);
+    // Left side: Joystick indicator (top) + Options (bottom)
+    let left_panel = col()
+        .w(480.0)
+        .h_full()
+        .gap(20.0)
+        .padding(20.0)
+        .child(
+            // Joystick indicator - larger circle, smaller dot
+            create_joystick_canvas(panel_bg, panel_border, accent, text_secondary)
+        )
+        .child(
+            // Options - no box labels, just toggles
+            col()
+                .gap(14.0)
+                .child(create_toggle(
+                    "Grab Audio Cue", state.grab_audio_enabled,
+                    text_primary, text_secondary, toggle_on, toggle_off,
+                ))
+                .child(create_toggle(
+                    "Release Audio Cue", state.release_audio_enabled,
+                    text_primary, text_secondary, toggle_on, toggle_off,
+                ))
+                .child(create_toggle(
+                    "System Tray", state.system_tray_enabled,
+                    text_primary, text_secondary, toggle_on, toggle_off,
+                ))
+        );
 
-    // Device selector
-    let device_selector = create_device_selector(&state.device_path, panel_bg, panel_border, text_primary, text_secondary);
+    // Right side: Sensitivity settings (top) + Config (bottom)
+    let right_panel = col()
+        .grow(1.0)
+        .h_full()
+        .gap(20.0)
+        .padding(20.0)
+        .child(
+            // Sensitivity settings - no section label
+            col()
+                .gap(16.0)
+                .child(create_slider(
+                    "X Sensitivity", state.sensitivity_x,
+                    text_primary, text_secondary, accent, slider_track, slider_knob,
+                ))
+                .child(create_slider(
+                    "Y Sensitivity", state.sensitivity_y,
+                    text_primary, text_secondary, accent, slider_track, slider_knob,
+                ))
+                .child(create_slider(
+                    "Deadzone", state.deadzone,
+                    text_primary, text_secondary, accent, slider_track, slider_knob,
+                ))
+        )
+        .child(
+            // Config - device selector, trigger button, import/export
+            col()
+                .gap(14.0)
+                .child(create_device_selector(&state.device_path, &state.device_list, panel_bg, panel_border, text_primary, text_secondary, accent))
+                .child(create_trigger_button(&state.trigger_button, state.trigger_listening, panel_bg, panel_border, text_primary, accent, text_secondary))
+                .child(row()
+                    .gap(12.0)
+                    .child(create_button("Import Config", panel_bg, panel_border, text_primary, accent))
+                    .child(create_button("Export Config", panel_bg, panel_border, text_primary, accent))
+                )
+        );
 
-    // Sensitivity sliders
-    let x_sensitivity = create_slider(
-        "X Sensitivity", state.sensitivity_x,
-        text_primary, text_secondary, accent, slider_track, slider_knob,
-        |v| format!("{:.0}%", v * 100.0)
-    );
-    let y_sensitivity = create_slider(
-        "Y Sensitivity", state.sensitivity_y,
-        text_primary, text_secondary, accent, slider_track, slider_knob,
-        |v| format!("{:.0}%", v * 100.0)
-    );
-    let deadzone = create_slider(
-        "Deadzone", state.deadzone,
-        text_primary, text_secondary, accent, slider_track, slider_knob,
-        |v| format!("{:.0}%", v * 100.0)
-    );
-
-    // Trigger button picker
-    let trigger_button = create_trigger_button(&state.trigger_button, panel_bg, panel_border, text_primary, accent, text_secondary);
-
-    // Toggles
-    let grab_audio_toggle = create_toggle(
-        "Grab Audio Cue", state.grab_audio_enabled,
-        text_primary, text_secondary, toggle_on, toggle_off, panel_bg, panel_border
-    );
-    let release_audio_toggle = create_toggle(
-        "Release Audio Cue", state.release_audio_enabled,
-        text_primary, text_secondary, toggle_on, toggle_off, panel_bg, panel_border
-    );
-    let system_tray_toggle = create_toggle(
-        "System Tray", state.system_tray_enabled,
-        text_primary, text_secondary, toggle_on, toggle_off, panel_bg, panel_border
-    );
-
-    // Import/Export buttons
-    let import_btn = create_button("Import Config", text_primary);
-    let export_btn = create_button("Export Config", text_primary);
-
-    // Main layout
+    // Main layout: two columns, no separator box/line
     col()
         .w_full()
         .h_full()
         .fill(bg)
-        .padding(20.0)
-        .gap(16.0)
         .child(
-            // Top row: joystick canvas + right panel (sliders)
             row()
                 .w_full()
-                .grow(1.0)
-                .gap(16.0)
-                .child(
-                    // Left: joystick indicator
-                    col()
-                        .size(200.0, 200.0)
-                        .gap(12.0)
-                        .child(joystick_canvas)
-                        .child(device_selector)
-                )
-                .child(
-                    // Right: sliders panel
-                    col()
-                        .grow(1.0)
-                        .gap(12.0)
-                        .padding(16.0)
-                        .radius(8.0)
-                        .fill(panel_bg)
-                        .border(1.0, panel_border)
-                        .child(text("Sensitivity Settings").font(TITLE_STYLE).color(text_primary))
-                        .child(x_sensitivity)
-                        .child(y_sensitivity)
-                        .child(deadzone)
-                        .child(el().h(16.0))
-                        .child(text("Trigger Button").font(TITLE_STYLE).color(text_primary))
-                        .child(trigger_button)
-                )
-        )
-        .child(
-            // Bottom row: toggles + import/export
-            row()
-                .w_full()
-                .gap(16.0)
-                .child(
-                    col()
-                        .grow(1.0)
-                        .gap(12.0)
-                        .padding(16.0)
-                        .radius(8.0)
-                        .fill(panel_bg)
-                        .border(1.0, panel_border)
-                        .child(text("Options").font(TITLE_STYLE).color(text_primary))
-                        .child(grab_audio_toggle)
-                        .child(release_audio_toggle)
-                        .child(system_tray_toggle)
-                )
-                .child(
-                    col()
-                        .size(200.0, 0.0)
-                        .gap(12.0)
-                        .padding(16.0)
-                        .radius(8.0)
-                        .fill(panel_bg)
-                        .border(1.0, panel_border)
-                        .child(text("Config").font(TITLE_STYLE).color(text_primary))
-                        .child(import_btn)
-                        .child(export_btn)
-                )
+                .h_full()
+                .child(left_panel)
+                .child(right_panel)
         )
 }
 
@@ -227,23 +207,23 @@ fn create_joystick_canvas(
     panel_bg: Color,
     panel_border: Color,
     accent: Color,
-    text_secondary: Color,
+    _text_secondary: Color,
 ) -> El {
     // Center position for joystick
-    let center_x = 100.0;
-    let center_y = 100.0;
-    let stick_radius = 60.0;
-    let knob_radius = 20.0;
+    let center_x = 220.0;
+    let center_y = 220.0;
+    let stick_radius = 160.0;  // Larger circle
+    let knob_radius = 16.0;    // Smaller dot
 
     el()
         .key("joystick_canvas")
-        .size(200.0, 200.0)
-        .radius(8.0)
-        .clip_rounded(8.0)
+        .size(440.0, 440.0)
+        .radius(12.0)
+        .clip_rounded(12.0)
         .fill(panel_bg)
         .border(1.0, panel_border)
         .child(
-            // Outer ring
+            // Outer ring - larger
             el()
                 .absolute(center_x - stick_radius, center_y - stick_radius)
                 .size(stick_radius * 2.0, stick_radius * 2.0)
@@ -264,45 +244,44 @@ fn create_joystick_canvas(
                 .fill(panel_border)
         )
         .child(
-            // Knob (centered for now - would animate with mouse input)
+            // Knob - smaller dot in center
             el()
                 .absolute(center_x - knob_radius, center_y - knob_radius)
                 .size(knob_radius * 2.0, knob_radius * 2.0)
                 .radius(knob_radius)
                 .fill(accent)
         )
-        .child(
-            text("Joystick").font(SMALL_STYLE).color(text_secondary).absolute(10.0, 10.0)
-        )
 }
 
 fn create_device_selector(
     device_path: &Option<String>,
+    _device_list: &[String],
     panel_bg: Color,
     panel_border: Color,
     text_primary: Color,
     text_secondary: Color,
+    _accent: Color,
 ) -> El {
     let display_text = device_path
         .as_ref()
         .map(|s| s.as_str())
-        .unwrap_or("No device selected");
+        .unwrap_or("Select mouse device");
 
     el()
         .key("device_selector")
         .w_full()
-        .h(40.0)
-        .radius(6.0)
+        .h(44.0)
+        .radius(8.0)
         .fill(panel_bg)
         .border(1.0, panel_border)
         .center_y()
-        .px(12.0)
+        .px(16.0)
         .child(text(display_text).font(LABEL_STYLE).color(text_primary))
         .child(el().grow(1.0))
         .child(text("▼").font(SMALL_STYLE).color(text_secondary))
 }
 
-fn create_slider<F>(
+fn create_slider(
     label: &str,
     value: f32,
     text_primary: Color,
@@ -310,30 +289,37 @@ fn create_slider<F>(
     accent: Color,
     slider_track: Color,
     slider_knob: Color,
-    format_fn: F,
-) -> El
-where
-    F: Fn(f32) -> String,
-{
-    let slider_width = 168.0;
-    let slider_height = 20.0;
-    let knob_diameter = 16.0;
-    let bar_height = 4.0;
+) -> El {
+    let slider_width = 280.0;
+    let slider_height = 24.0;
+    let knob_diameter = 20.0;
+    let bar_height = 6.0;
     let travel = slider_width - knob_diameter;
     let knob_x = knob_diameter / 2.0 + value * travel;
     let fill_width = knob_diameter / 2.0 + value * travel;
+    let label_key = label.replace(" ", "_").to_lowercase();
 
     row()
         .w_full()
-        .h(50.0)
-        .gap(12.0)
+        .h(56.0)
+        .gap(16.0)
         .center_y()
-        .child(text(label).font(LABEL_STYLE).color(text_primary).w(120.0))
+        .child(text(label).font(LABEL_STYLE).color(text_primary).w(130.0))
         .child(
             el()
-                .key("slider_track")
+                .key(&format!("slider_{}", label_key))
                 .role("slider")
+                .label(label)
                 .size(slider_width, slider_height)
+                .on_drag(move |s: &mut UiState, d: &mut Drag, _tx: &mut Tx| {
+                    let new_value = ((d.x - knob_diameter / 2.0) / travel).clamp(0.0, 1.0);
+                    match label_key.as_str() {
+                        "x_sensitivity" => s.sensitivity_x = new_value,
+                        "y_sensitivity" => s.sensitivity_y = new_value,
+                        "deadzone" => s.deadzone = new_value,
+                        _ => {}
+                    }
+                })
                 .child(
                     el()
                         .key("track_bg")
@@ -357,33 +343,41 @@ where
                         .absolute(knob_x, (slider_height - knob_diameter) / 2.0)
                         .radius(knob_diameter / 2.0)
                         .fill(slider_knob)
-                        .box_shadow(Shadow::core_animation(0.0, 1.0, 3.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.3 }))
+                        .box_shadow(Shadow::core_animation(0.0, 2.0, 6.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.4 }))
                 )
         )
-        .child(text(format_fn(value)).font(VALUE_STYLE).color(text_secondary).w(50.0))
+        .child(text(format!("{:.0}%", value * 100.0)).font(VALUE_STYLE).color(text_secondary).w(60.0))
 }
 
 fn create_trigger_button(
     trigger: &str,
+    listening: bool,
     panel_bg: Color,
     panel_border: Color,
-    text_primary: Color,
+    _text_primary: Color,
     accent: Color,
     text_secondary: Color,
 ) -> El {
+    let (btn_bg, btn_text, btn_border, text_color) = if listening {
+        (accent, "Press any key...", accent, Color::WHITE)
+    } else {
+        (panel_bg, trigger, panel_border, accent)
+    };
+
     el()
         .key("trigger_button")
         .w_full()
-        .h(40.0)
-        .radius(6.0)
-        .fill(panel_bg)
-        .border(1.0, panel_border)
+        .h(48.0)
+        .radius(8.0)
+        .fill(btn_bg)
+        .border(2.0, btn_border)
         .center_y()
-        .px(12.0)
-        .child(text("Trigger: ").font(LABEL_STYLE).color(text_primary))
-        .child(text(trigger).font(LABEL_STYLE).color(accent))
-        .child(el().grow(1.0))
-        .child(text("Press to set").font(SMALL_STYLE).color(text_secondary))
+        .px(16.0)
+        .on_press(|s: &mut UiState| {
+            s.trigger_listening = true;
+        })
+        .child(text("Trigger Button").font(SMALL_STYLE).color(text_secondary).absolute(16.0, 6.0))
+        .child(text(btn_text).font(LABEL_STYLE).color(text_color).absolute(16.0, 26.0))
 }
 
 fn create_toggle(
@@ -393,33 +387,41 @@ fn create_toggle(
     text_secondary: Color,
     toggle_on: Color,
     toggle_off: Color,
-    _panel_bg: Color,
-    _panel_border: Color,
 ) -> El {
     let (track_color, thumb_x) = if enabled {
-        (toggle_on, 28.0)
+        (toggle_on, 32.0)
     } else {
         (toggle_off, 4.0)
     };
 
+    let label_key = label.replace(" ", "_").to_lowercase();
+
     row()
         .w_full()
-        .h(40.0)
-        .gap(12.0)
+        .h(44.0)
+        .gap(16.0)
         .center_y()
         .child(text(label).font(LABEL_STYLE).color(text_primary).grow(1.0))
         .child(
             el()
-                .size(48.0, 28.0)
-                .radius(14.0)
+                .size(56.0, 32.0)
+                .radius(16.0)
                 .fill(track_color)
+                .on_press(move |s: &mut UiState| {
+                    match label_key.as_str() {
+                        "grab_audio_cue" => s.grab_audio_enabled = !s.grab_audio_enabled,
+                        "release_audio_cue" => s.release_audio_enabled = !s.release_audio_enabled,
+                        "system_tray" => s.system_tray_enabled = !s.system_tray_enabled,
+                        _ => {}
+                    }
+                })
                 .child(
                     el()
                         .absolute(thumb_x, 2.0)
-                        .size(24.0, 24.0)
-                        .radius(12.0)
+                        .size(28.0, 28.0)
+                        .radius(14.0)
                         .fill(Color::WHITE)
-                        .box_shadow(Shadow::core_animation(0.0, 1.0, 3.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.3 }))
+                        .box_shadow(Shadow::core_animation(0.0, 2.0, 6.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.4 }))
                 )
         )
         .child(text(if enabled { "ON" } else { "OFF" }).font(VALUE_STYLE).color(if enabled { toggle_on } else { text_secondary }))
@@ -427,16 +429,81 @@ fn create_toggle(
 
 fn create_button(
     label: &str,
+    panel_bg: Color,
+    panel_border: Color,
     text_primary: Color,
+    accent: Color,
 ) -> El {
-    let panel_bg = Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 };
-    let panel_border = Color { r: 0.18, g: 0.18, b: 0.22, a: 1.0 };
+    let label_key = label.replace(" ", "_").to_lowercase();
+
     row()
         .w_full()
-        .h(36.0)
+        .h(40.0)
         .center()
-        .radius(6.0)
+        .radius(8.0)
         .fill(panel_bg)
         .border(1.0, panel_border)
+        .on_press(move |s: &mut UiState| {
+            match label_key.as_str() {
+                "import_config" => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("TOML", &["toml"])
+                        .pick_file() {
+                        if let Ok(cfg) = load_config_from_path(&path) {
+                            s.sensitivity_x = cfg.sensitivity_x;
+                            s.sensitivity_y = cfg.sensitivity_y;
+                            s.deadzone = cfg.deadzone;
+                            s.trigger_button = cfg.trigger_button;
+                            s.grab_audio_enabled = cfg.audio_enabled;
+                            s.release_audio_enabled = cfg.audio_enabled;
+                            s.system_tray_enabled = cfg.minimize_to_tray;
+                            s.device_path = cfg.device_path;
+                        }
+                    }
+                }
+                "export_config" => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("TOML", &["toml"])
+                        .save_file() {
+                        let cfg = Config {
+                            device_path: s.device_path.clone(),
+                            sensitivity_x: s.sensitivity_x,
+                            sensitivity_y: s.sensitivity_y,
+                            deadzone: s.deadzone,
+                            trigger_button: s.trigger_button.clone(),
+                            minimize_to_tray: s.system_tray_enabled,
+                            audio_enabled: s.grab_audio_enabled,
+                        };
+                        let _ = save_config_to_path(&cfg, &path);
+                    }
+                }
+                _ => {}
+            }
+        })
         .child(text(label).font(LABEL_STYLE).color(text_primary))
+}
+
+fn enumerate_mice() -> Vec<String> {
+    let mut devices = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/dev/input/by-id") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.contains("mouse") && !name.contains("kbd") {
+                devices.push(format!("/dev/input/by-id/{}", name));
+            }
+        }
+    }
+    devices
+}
+
+fn load_config_from_path(path: &std::path::Path) -> anyhow::Result<Config> {
+    let content = std::fs::read_to_string(path)?;
+    let cfg: Config = toml::from_str(&content)?;
+    Ok(cfg)
+}
+
+fn save_config_to_path(cfg: &Config, path: &std::path::Path) -> anyhow::Result<()> {
+    let toml_str = toml::to_string_pretty(cfg)?;
+    std::fs::write(path, toml_str)?;
+    Ok(())
 }

@@ -102,12 +102,12 @@ All fields are optional – missing values fall back to defaults.
 
 ## Roadmap
 
-- **Phase 1 (done)**: Core mouse‑to‑joystick translation and basic Rune UI layout.
-- **Phase 2**: Implement device detection with `udev`, hot‑plug support, and robust input reading.
-- **Phase 3**: Add trigger‑button “listening” mode with global key/mouse hook.
-- **Phase 4**: Integrate audio‑cue controls and system‑tray functionality.
-- **Phase 5**: Export to more formats (JSON, YAML), add support for multiple concurrent devices.
-- **Phase 6**: Wayland support, packaging for distro (AppImage, Flatpak), UI theming.
+- [x] **Phase 1**: Core mouse‑to‑joystick translation and basic Rune UI layout.
+- [ ] **Phase 2**: Implement device detection with `udev`, hot‑plug support, and robust input reading.
+- [ ] **Phase 3**: Add trigger‑button "listening" mode with global key/mouse hook.
+- [ ] **Phase 4**: Integrate audio‑cue controls and system‑tray functionality.
+- [ ] **Phase 5**: Export to more formats (JSON, YAML), add support for multiple concurrent devices.
+- [ ] **Phase 6**: Wayland support, packaging for distro (AppImage, Flatpak), UI theming.
 
 ## Troubleshooting
 

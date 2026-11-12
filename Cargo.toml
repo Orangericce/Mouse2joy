@@ -36,6 +36,7 @@ env_logger = "0.10"
 
 # Misc utilities
 anyhow = "1.0"
+rfd = "0.13"
 
 [profile.release]
 strip = true
