@@ -40,7 +40,7 @@ find_project_root() {
 }
 
 # Find project root
-PROJECT_ROOT="$(find_project_root)"
+PROJECT_ROOT="$(find_project_root || true)"
 
 # If not in project, clone it
 if [[ -z "$PROJECT_ROOT" ]] || [[ ! -f "$PROJECT_ROOT/Cargo.toml" ]]; then
@@ -87,10 +87,14 @@ if [[ -f "$PROJECT_ROOT/mouse2joy.service" ]]; then
     log_info "Installing systemd user service..."
     sudo mkdir -p "$SERVICE_DIR"
     sudo cp "$PROJECT_ROOT/mouse2joy.service" "$SERVICE_DIR/"
-    sudo systemctl --user daemon-reload
-    sudo systemctl --user enable mouse2joy
-    sudo systemctl --user start mouse2joy
-    log_info "Systemd service installed and started."
+    if systemctl --user daemon-reload 2>/dev/null; then
+        systemctl --user enable mouse2joy 2>/dev/null || true
+        systemctl --user start mouse2joy 2>/dev/null || true
+        log_info "Systemd service installed and started."
+    else
+        log_warn "Could not connect to user D-Bus. Service file installed but not enabled."
+        log_warn "Run 'systemctl --user enable --now mouse2joy' manually after login."
+    fi
 else
     log_warn "mouse2joy.service not found in project - skipping systemd integration."
 fi
