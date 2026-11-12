@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -e
 
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
+
 # Function to find the project root (where Cargo.toml lives)
 find_project_root() {
     local current_dir
@@ -24,25 +34,40 @@ find_project_root() {
         parent_dir="$(dirname "$current_dir")"
     done
     
-    # Fallback to current directory
-    echo "$(pwd)"
+    # Not found
+    return 1
 }
 
-# Find and cd to the project root
+# Find project root
 PROJECT_ROOT="$(find_project_root)"
-cd "$PROJECT_ROOT"
 
-# Verify we're in the right place
+# If not in project, clone it
+if [[ -z "$PROJECT_ROOT" ]] || [[ ! -f "$PROJECT_ROOT/Cargo.toml" ]]; then
+    log_info "Project not found locally. Cloning from GitHub..."
+    TEMP_DIR="$(mktemp -d)"
+    cd "$TEMP_DIR"
+    git clone https://github.com/Orangericce/mouse2joy.git
+    PROJECT_ROOT="$TEMP_DIR/mouse2joy"
+    cd "$PROJECT_ROOT"
+    log_info "Cloned to $PROJECT_ROOT"
+else
+    cd "$PROJECT_ROOT"
+    log_info "Found project at $PROJECT_ROOT"
+fi
+
+# Build
+log_info "Building mouse2joy (release)..."
 cargo build --release || {
-    echo "Error: cargo build failed. Are you in the mouse2joy project directory?"
-    echo "Run: cd /home/orangericce/Documents/mouse2joy"
+    log_error "cargo build failed. Please check your Rust installation."
     exit 1
 }
 
 # Install binary
+log_info "Installing binary to /usr/local/bin/mouse2joy"
 sudo cp target/release/mouse2joy /usr/local/bin/
 
 # Install desktop entry
+log_info "Installing desktop entry..."
 mkdir -p ~/.local/share/applications
 cat > ~/.local/share/applications/mouse2joy.desktop << 'EOF'
 [Desktop Entry]
@@ -57,13 +82,21 @@ EOF
 
 # Optional: install a user‑systemd service (for auto‑start)
 SERVICE_DIR=~/.config/systemd/user
-sudo mkdir -p $SERVICE_DIR
-sudo cp mouse2joy.service $SERVICE_DIR/ 2>/dev/null || echo "mouse2joy.service not found – skipping systemd integration."
-if [ -f "$SERVICE_DIR/mouse2joy.service" ]; then
+if [[ -f "$PROJECT_ROOT/mouse2joy.service" ]]; then
+    log_info "Installing systemd user service..."
+    sudo mkdir -p "$SERVICE_DIR"
+    sudo cp "$PROJECT_ROOT/mouse2joy.service" "$SERVICE_DIR/"
+    sudo systemctl --user daemon-reload
     sudo systemctl --user enable mouse2joy
     sudo systemctl --user start mouse2joy
+    log_info "Systemd service installed and started."
+else
+    log_warn "mouse2joy.service not found in project - skipping systemd integration."
 fi
 
-echo "Installation complete! Run 'mouse2joy' to start."
-echo "Note: The binary will be installed to /usr/local/bin/mouse2joy"
-echo "The desktop entry will be available in your application menu."
+log_info "Installation complete! Run 'mouse2joy' to start."
+echo ""
+echo "The binary is installed to /usr/local/bin/mouse2joy"
+echo "The desktop entry is available in your application menu."
+echo ""
+echo "To uninstall: curl -sSf https://raw.githubusercontent.com/Orangericce/mouse2joy/main/uninstall.sh | bash -s -- uninstall"
