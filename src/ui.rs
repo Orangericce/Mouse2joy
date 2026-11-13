@@ -439,12 +439,12 @@ fn create_button(
     let label_key = label.replace(" ", "_").to_lowercase();
 
     row()
-        .w_full()
         .h(32.0)
         .center()
         .radius(6.0)
         .fill(panel_bg)
         .border(1.0, panel_border)
+        .px(16.0)
         .on_press(move |s: &mut UiState| {
             match label_key.as_str() {
                 "import" => {
