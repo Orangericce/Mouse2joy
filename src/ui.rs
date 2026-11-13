@@ -25,6 +25,8 @@ pub struct UiState {
     pub device_path: Option<String>,
     pub device_list: Vec<String>,
     pub trigger_listening: bool,
+    // Runtime state from shared AppState
+    pub grabbed: bool,
 }
 
 impl Default for UiState {
@@ -40,6 +42,7 @@ impl Default for UiState {
             device_path: None,
             device_list: Vec::new(),
             trigger_listening: false,
+            grabbed: false,
         }
     }
 }
@@ -51,12 +54,31 @@ impl From<AppState> for UiState {
             sensitivity_y: state.sensitivity_y,
             deadzone: state.deadzone,
             trigger_button: state.trigger_button,
-            grab_audio_enabled: state.audio_enabled,
-            release_audio_enabled: state.audio_enabled,
+            grab_audio_enabled: state.grab_audio_enabled,
+            release_audio_enabled: state.release_audio_enabled,
             system_tray_enabled: state.minimize_to_tray,
             device_path: state.device_path,
             device_list: Vec::new(),
             trigger_listening: false,
+            grabbed: state.grabbed,
+        }
+    }
+}
+
+impl From<UiState> for AppState {
+    fn from(ui: UiState) -> Self {
+        AppState {
+            device_path: ui.device_path,
+            sensitivity_x: ui.sensitivity_x,
+            sensitivity_y: ui.sensitivity_y,
+            deadzone: ui.deadzone,
+            trigger_button: ui.trigger_button,
+            minimize_to_tray: ui.system_tray_enabled,
+            grab_audio_enabled: ui.grab_audio_enabled,
+            release_audio_enabled: ui.release_audio_enabled,
+            grabbed: ui.grabbed,
+            mouse_dx: 0,
+            mouse_dy: 0,
         }
     }
 }
@@ -64,8 +86,14 @@ impl From<AppState> for UiState {
 // Global holder for initial state (since init must be fn())
 static INITIAL_STATE: OnceLock<UiState> = OnceLock::new();
 
-pub fn run_ui(initial_state: AppState) -> anyhow::Result<()> {
+// Channel to send UI state updates back to main
+static UI_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<AppState>> = OnceLock::new();
+
+pub fn run_ui(initial_state: AppState, ui_tx: tokio::sync::mpsc::UnboundedSender<AppState>) -> anyhow::Result<()> {
     log::info!("Starting mouse2joy UI...");
+
+    // Store the sender for later use
+    let _ = UI_TX.set(ui_tx);
 
     // Convert to UI state and store in global for the init fn
     let mut ui_state: UiState = initial_state.into();
@@ -90,7 +118,9 @@ fn ui_init() -> UiState {
     INITIAL_STATE.get().cloned().unwrap_or_default()
 }
 
-fn poll_shared_state(_state: &mut UiState, now: f64, _tx: &mut Tx) -> bool {
+fn poll_shared_state(state: &mut UiState, now: f64, _tx: &mut Tx) -> bool {
+    // Sync grabbed state from shared AppState periodically
+    // For now, we just return true to keep polling
     now > 0.0
 }
 
@@ -100,6 +130,10 @@ fn on_key(state: &mut UiState, event: &KeyEvent, _tx: &mut Tx) -> bool {
             Key::Text(t) if !t.is_empty() => {
                 state.trigger_button = t.to_uppercase();
                 state.trigger_listening = false;
+                // Send updated state to shared AppState
+                if let Some(tx) = UI_TX.get() {
+                    let _ = tx.send(state.clone().into());
+                }
                 true
             }
             Key::Escape => {
@@ -125,6 +159,8 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
     let slider_knob = Color::WHITE;
     let toggle_on = accent;
     let toggle_off = Color { r: 0.25, g: 0.25, b: 0.3, a: 1.0 };
+    let grabbed_color = Color { r: 0.2, g: 0.8, b: 0.3, a: 1.0 }; // Green for grabbed
+    let ungrabbed_color = Color { r: 0.8, g: 0.3, b: 0.3, a: 1.0 }; // Red for ungrabbed
 
     // Left side: Joystick indicator (top) + Options (bottom)
     let left_panel = col()
@@ -133,8 +169,30 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
         .gap(20.0)
         .padding(20.0)
         .child(
-            // Joystick indicator - larger circle, smaller dot
-            create_joystick_canvas(panel_bg, panel_border, accent, text_secondary)
+            // Joystick indicator with grabbed status
+            col()
+                .gap(10.0)
+                .child(
+                    // Grabbed/Ungrabbed indicator
+                    row()
+                        .h(28.0)
+                        .center()
+                        .gap(8.0)
+                        .child(
+                            el()
+                                .size(12.0, 12.0)
+                                .radius(6.0)
+                                .fill(if state.grabbed { grabbed_color } else { ungrabbed_color })
+                                .box_shadow(Shadow::core_animation(0.0, 0.0, 8.0, if state.grabbed { grabbed_color } else { ungrabbed_color }))
+                        )
+                        .child(text(if state.grabbed { "GRABBED" } else { "UNGRABBED" })
+                            .font(LABEL_STYLE)
+                            .color(if state.grabbed { grabbed_color } else { ungrabbed_color }))
+                )
+                .child(
+                    // Joystick indicator - larger circle, smaller dot
+                    create_joystick_canvas(panel_bg, panel_border, accent, text_secondary, state.grabbed)
+                )
         )
         .child(
             // Options - no box labels, just toggles
@@ -209,6 +267,7 @@ fn create_joystick_canvas(
     panel_border: Color,
     accent: Color,
     _text_secondary: Color,
+    grabbed: bool,
 ) -> El {
     // Pure black background for joystick
     let bg = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
@@ -217,6 +276,8 @@ fn create_joystick_canvas(
     let center_y = 220.0;
     let stick_radius = 160.0;  // Larger circle
     let knob_radius = 16.0;    // Smaller dot
+    let grabbed_color = Color { r: 0.2, g: 0.8, b: 0.3, a: 1.0 };
+    let ungrabbed_color = Color { r: 0.8, g: 0.3, b: 0.3, a: 1.0 };
 
     el()
         .key("joystick_canvas")
@@ -224,7 +285,7 @@ fn create_joystick_canvas(
         .radius(12.0)
         .clip_rounded(12.0)
         .fill(bg)
-        .border(1.0, panel_border)
+        .border(2.0, if grabbed { grabbed_color } else { panel_border })
         .child(
             // Outer ring - larger
             el()
@@ -247,12 +308,12 @@ fn create_joystick_canvas(
                 .fill(panel_border)
         )
         .child(
-            // Knob - smaller dot in center
+            // Knob - smaller dot in center, color changes based on grabbed state
             el()
                 .absolute(center_x - knob_radius, center_y - knob_radius)
                 .size(knob_radius * 2.0, knob_radius * 2.0)
                 .radius(knob_radius)
-                .fill(accent)
+                .fill(if grabbed { grabbed_color } else { accent })
         )
 }
 
@@ -290,6 +351,10 @@ fn create_device_selector(
                 let next_idx = (current_idx + 1) % device_list.len();
                 s.device_path = Some(device_list[next_idx].clone());
                 log::info!("Selected device: {:?}", s.device_path);
+                // Sync to shared AppState
+                if let Some(tx) = UI_TX.get() {
+                    let _ = tx.send(s.clone().into());
+                }
             }
         })
         .child(text(display_text).font(LABEL_STYLE).color(text_primary))
@@ -334,6 +399,10 @@ fn create_slider(
                         "y_sensitivity" => s.sensitivity_y = new_value,
                         "deadzone" => s.deadzone = new_value,
                         _ => {}
+                    }
+                    // Sync to shared AppState on each drag update
+                    if let Some(tx) = UI_TX.get() {
+                        let _ = tx.send(s.clone().into());
                     }
                 })
                 .child(
@@ -391,6 +460,10 @@ fn create_trigger_button(
         .px(16.0)
         .on_press(|s: &mut UiState| {
             s.trigger_listening = true;
+            // Sync to shared AppState
+            if let Some(tx) = UI_TX.get() {
+                let _ = tx.send(s.clone().into());
+            }
         })
         .child(text("Trigger Button").font(SMALL_STYLE).color(text_secondary).absolute(16.0, 6.0))
         .child(text(btn_text).font(LABEL_STYLE).color(text_color).absolute(16.0, 26.0))
@@ -429,6 +502,10 @@ fn create_toggle(
                         "release_audio_cue" => s.release_audio_enabled = !s.release_audio_enabled,
                         "system_tray" => s.system_tray_enabled = !s.system_tray_enabled,
                         _ => {}
+                    }
+                    // Sync to shared AppState
+                    if let Some(tx) = UI_TX.get() {
+                        let _ = tx.send(s.clone().into());
                     }
                 })
                 .child(
@@ -470,10 +547,14 @@ fn create_button(
                             s.sensitivity_y = cfg.sensitivity_y;
                             s.deadzone = cfg.deadzone;
                             s.trigger_button = cfg.trigger_button;
-                            s.grab_audio_enabled = cfg.audio_enabled;
-                            s.release_audio_enabled = cfg.audio_enabled;
+                            s.grab_audio_enabled = cfg.grab_audio_enabled;
+                            s.release_audio_enabled = cfg.release_audio_enabled;
                             s.system_tray_enabled = cfg.minimize_to_tray;
                             s.device_path = cfg.device_path;
+                            // Sync to shared AppState
+                            if let Some(tx) = UI_TX.get() {
+                                let _ = tx.send(s.clone().into());
+                            }
                         }
                     }
                 }
@@ -488,7 +569,8 @@ fn create_button(
                             deadzone: s.deadzone,
                             trigger_button: s.trigger_button.clone(),
                             minimize_to_tray: s.system_tray_enabled,
-                            audio_enabled: s.grab_audio_enabled,
+                            grab_audio_enabled: s.grab_audio_enabled,
+                            release_audio_enabled: s.release_audio_enabled,
                         };
                         let _ = save_config_to_path(&cfg, &path);
                     }

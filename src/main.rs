@@ -19,6 +19,18 @@ async fn main() -> anyhow::Result<()> {
     // Shared application state
     let app_state = Arc::new(Mutex::new(state::AppState::new(cfg)));
 
+    // Start debounced config saver
+    let config_saver_tx = config::create_debounced_config_saver();
+    let saver_state = app_state.clone();
+    tokio::spawn(async move {
+        // Periodically send current config to saver
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            let state = saver_state.lock().await;
+            let _ = config_saver_tx.send(state.to_config());
+        }
+    });
+
     // Start device monitoring (runs in background)
     let dm_state = app_state.clone();
     tokio::spawn(async move {
@@ -45,8 +57,27 @@ async fn main() -> anyhow::Result<()> {
         state.clone()
     };
 
+    // Run UI with a channel to sync state back
+    let (ui_tx, mut ui_rx) = tokio::sync::mpsc::unbounded_channel::<state::AppState>();
+    
+    // Spawn a task to receive UI state updates and apply to shared state
+    let sync_state = app_state.clone();
+    tokio::spawn(async move {
+        while let Some(new_state) = ui_rx.recv().await {
+            let mut state = sync_state.lock().await;
+            // Preserve runtime state
+            let grabbed = state.grabbed;
+            let mouse_dx = state.mouse_dx;
+            let mouse_dy = state.mouse_dy;
+            *state = new_state;
+            state.grabbed = grabbed;
+            state.mouse_dx = mouse_dx;
+            state.mouse_dy = mouse_dy;
+        }
+    });
+
     // Start the UI (Rune) - runs synchronously, blocks this thread
-    ui::run_ui(initial_state)?;
+    ui::run_ui(initial_state, ui_tx)?;
 
     Ok(())
 }

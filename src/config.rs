@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, Mutex};
+use tokio::time::sleep;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct Config {
     pub device_path: Option<String>,
@@ -17,7 +21,9 @@ pub struct Config {
     #[serde(default)]
     pub minimize_to_tray: bool,
     #[serde(default = "default_audio_enabled")]
-    pub audio_enabled: bool,
+    pub grab_audio_enabled: bool,
+    #[serde(default = "default_audio_enabled")]
+    pub release_audio_enabled: bool,
 }
 
 fn default_sensitivity() -> f32 { 1.0 }
@@ -34,7 +40,8 @@ impl Default for Config {
             deadzone: 0.05,
             trigger_button: "BTN_LEFT".to_string(),
             minimize_to_tray: false,
-            audio_enabled: true,
+            grab_audio_enabled: true,
+            release_audio_enabled: true,
         }
     }
 }
@@ -65,4 +72,40 @@ pub fn save_config(cfg: &Config) -> anyhow::Result<()> {
     let path = config_path();
     fs::write(path, toml_str)?;
     Ok(())
+}
+
+/// Returns a sender that can be used to request config saves with debouncing.
+/// The returned receiver should be spawned as a background task.
+pub fn create_debounced_config_saver() -> mpsc::UnboundedSender<Config> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Config>();
+    
+    tokio::spawn(async move {
+        let mut last_saved: Option<Config> = None;
+        let mut pending_config: Option<Config> = None;
+        
+        loop {
+            // Wait for either a new config or timeout
+            tokio::select! {
+                Some(cfg) = rx.recv() => {
+                    // New config received - update pending and reset timer
+                    pending_config = Some(cfg);
+                }
+                _ = sleep(Duration::from_secs(5)), if pending_config.is_some() => {
+                    // 5 seconds elapsed since last config change - save it
+                    if let Some(cfg) = pending_config.take() {
+                        if Some(&cfg) != last_saved.as_ref() {
+                            if let Err(e) = save_config(&cfg) {
+                                log::warn!("Failed to save config: {}", e);
+                            } else {
+                                log::debug!("Config saved (debounced)");
+                                last_saved = Some(cfg);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    
+    tx
 }

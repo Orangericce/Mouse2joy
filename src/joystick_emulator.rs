@@ -118,23 +118,23 @@ pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>) -> anyhow::Resul
 
     loop {
         // Check grab state for edge detection
-        let (grabbed, audio_enabled) = {
+        let (grabbed, grab_audio, release_audio) = {
             let s = state.lock().await;
-            (s.grabbed, s.audio_enabled)
+            (s.grabbed, s.grab_audio_enabled, s.release_audio_enabled)
         };
 
         // Handle grab/release edge events
         if grabbed && !last_grabbed {
             // Just grabbed - press trigger button
             let _ = emulator.press_trigger();
-            if audio_enabled {
+            if grab_audio {
                 // Audio will be played by the audio module
             }
         } else if !grabbed && last_grabbed {
             // Just released - release trigger button and center
             let _ = emulator.release_trigger();
             let _ = emulator.center();
-            if audio_enabled {
+            if release_audio {
                 // Audio will be played by the audio module
             }
         }

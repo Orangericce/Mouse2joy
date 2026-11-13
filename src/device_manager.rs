@@ -51,15 +51,17 @@ pub async fn run_device_watcher(state: Arc<Mutex<AppState>>) {
     }
 }
 
-/// Enumerate available mice from /dev/input/by-id
+/// Enumerate available mice and trackpads from /dev/input/by-id
 pub fn enumerate_mice() -> Vec<String> {
     let mut devices = Vec::new();
     let by_id = Path::new("/dev/input/by-id");
     if let Ok(entries) = fs::read_dir(by_id) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            // Filter for mice (exclude keyboards, etc.)
-            if name.to_lowercase().contains("mouse") && !name.to_lowercase().contains("kbd") {
+            let lower = name.to_lowercase();
+            // Filter for mice and trackpads (exclude keyboards)
+            if (lower.contains("mouse") || lower.contains("trackpad") || lower.contains("touchpad"))
+                && !lower.contains("kbd") {
                 devices.push(format!("/dev/input/by-id/{}", name));
             }
         }
@@ -71,7 +73,7 @@ pub fn enumerate_mice() -> Vec<String> {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("event") {
                 let path = format!("/dev/input/{}", name);
-                // Check if it's a mouse by reading capabilities
+                // Check if it's a mouse/trackpad by reading capabilities
                 if is_mouse_device(&path) && !devices.iter().any(|d| same_device(d, &path)) {
                     devices.push(path);
                 }
@@ -83,14 +85,39 @@ pub fn enumerate_mice() -> Vec<String> {
     devices
 }
 
-/// Check if a device path corresponds to a mouse
+/// Check if a device path corresponds to a mouse or trackpad
 fn is_mouse_device(path: &str) -> bool {
     if let Ok(device) = Device::open(path) {
         let caps = device.supported_events();
-        // Check for relative axes (mouse movement) and no keyboard keys
+        // Check for relative axes (mouse movement)
         let has_rel = caps.contains(EventType::RELATIVE);
+        // Check for absolute axes (touchpad/touchscreen)
+        let has_abs = caps.contains(EventType::ABSOLUTE);
+        // Check for keyboard keys (exclude keyboards)
         let has_keys = caps.contains(EventType::KEY);
-        has_rel && !has_keys
+        
+        // Mouse: has relative axes, no keyboard keys
+        let is_mouse = has_rel && !has_keys;
+        
+        // Touchpad: has absolute axes and has some keys
+        // (exclude full keyboards by checking for limited keys)
+        let is_touchpad = has_abs && has_keys;
+        
+        // For touchpad, check if it has standard touchpad axes (ABS_X, ABS_Y)
+        // These are absolute axis codes 0 and 1 respectively
+        if is_touchpad {
+            // Try to check supported_absolute_axes if available
+            if let Some(axes) = device.supported_absolute_axes() {
+                use evdev::AbsoluteAxisCode;
+                let has_x = axes.contains(AbsoluteAxisCode::ABS_X);
+                let has_y = axes.contains(AbsoluteAxisCode::ABS_Y);
+                if has_x && has_y {
+                    return true;
+                }
+            }
+        }
+        
+        is_mouse || is_touchpad
     } else {
         false
     }

@@ -9,7 +9,8 @@ pub struct AppState {
     pub deadzone: f32,
     pub trigger_button: String,
     pub minimize_to_tray: bool,
-    pub audio_enabled: bool,
+    pub grab_audio_enabled: bool,
+    pub release_audio_enabled: bool,
 
     // Runtime state
     pub grabbed: bool,
@@ -26,10 +27,25 @@ impl AppState {
             deadzone: cfg.deadzone,
             trigger_button: cfg.trigger_button,
             minimize_to_tray: cfg.minimize_to_tray,
-            audio_enabled: cfg.audio_enabled,
+            grab_audio_enabled: cfg.grab_audio_enabled,
+            release_audio_enabled: cfg.release_audio_enabled,
             grabbed: false,
             mouse_dx: 0,
             mouse_dy: 0,
+        }
+    }
+
+    /// Convert current state to Config for saving
+    pub fn to_config(&self) -> Config {
+        Config {
+            device_path: self.device_path.clone(),
+            sensitivity_x: self.sensitivity_x,
+            sensitivity_y: self.sensitivity_y,
+            deadzone: self.deadzone,
+            trigger_button: self.trigger_button.clone(),
+            minimize_to_tray: self.minimize_to_tray,
+            grab_audio_enabled: self.grab_audio_enabled,
+            release_audio_enabled: self.release_audio_enabled,
         }
     }
 }
