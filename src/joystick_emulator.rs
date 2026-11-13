@@ -1,4 +1,6 @@
+use crate::audio::AudioPlayer;
 use crate::state::AppState;
+use crate::ui::VisualState;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -50,9 +52,9 @@ impl JoystickEmulator {
         })
     }
 
-    /// Update joystick axes based on mouse deltas from AppState.
+    /// Update joystick axes based on mouse deltas from AppState and update visual state.
     /// This should be called in a loop at a regular interval (e.g., 60Hz).
-    pub async fn update(&mut self, state: Arc<Mutex<AppState>>) {
+    pub async fn update(&mut self, state: Arc<Mutex<AppState>>, visual: &VisualState) {
         let (dx, dy, grabbed, sensitivity_x, sensitivity_y) = {
             let mut s = state.lock().await;
             let dx = s.mouse_dx;
@@ -72,13 +74,30 @@ impl JoystickEmulator {
                 let _ = self.device.send(Event::Absolute(Absolute::Position(Position::Y)), 0);
                 let _ = self.device.synchronize();
             }
+            // Update visual state grabbed flag
+            visual.set_grabbed(false);
             return;
         }
 
+        // Update visual state grabbed flag
+        visual.set_grabbed(true);
+
         // Apply deltas to position (clamped to axis range)
         let scale = 100.0; // Adjust this for sensitivity feel
-        self.x_pos = (self.x_pos as f32 + dx as f32 * sensitivity_x * scale).clamp(self.axis_min as f32, self.axis_max as f32) as i32;
-        self.y_pos = (self.y_pos as f32 + dy as f32 * sensitivity_y * scale).clamp(self.axis_min as f32, self.axis_max as f32) as i32;
+        let old_x = self.x_pos as f32;
+        let old_y = self.y_pos as f32;
+        let new_x = (old_x + dx as f32 * sensitivity_x * scale).clamp(self.axis_min as f32, self.axis_max as f32);
+        let new_y = (old_y + dy as f32 * sensitivity_y * scale).clamp(self.axis_min as f32, self.axis_max as f32);
+        
+        self.x_pos = new_x as i32;
+        self.y_pos = new_y as i32;
+
+        // Normalize to -1.0 to 1.0 for visualizer (JoystickEmulator uses -32767 to 32767)
+        let visual_x = new_x / 32767.0;
+        let visual_y = new_y / 32767.0;
+        
+        // Update visual state with normalized position
+        visual.set_knob(visual_x, visual_y);
 
         // Emit axis events
         let _ = self.device.send(Event::Absolute(Absolute::Position(Position::X)), self.x_pos);
@@ -112,7 +131,7 @@ impl JoystickEmulator {
 }
 
 /// Run the joystick emulator loop
-pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>) -> anyhow::Result<()> {
+pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>, visual: &VisualState) -> anyhow::Result<()> {
     let mut emulator = JoystickEmulator::new()?;
     let mut last_grabbed = false;
 
@@ -129,6 +148,7 @@ pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>) -> anyhow::Resul
             let _ = emulator.press_trigger();
             if grab_audio {
                 // Audio will be played by the audio module
+                AudioPlayer::new().play_grab();
             }
         } else if !grabbed && last_grabbed {
             // Just released - release trigger button and center
@@ -136,12 +156,13 @@ pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>) -> anyhow::Resul
             let _ = emulator.center();
             if release_audio {
                 // Audio will be played by the audio module
+                AudioPlayer::new().play_release();
             }
         }
         last_grabbed = grabbed;
 
         // Update axes
-        emulator.update(state.clone()).await;
+        emulator.update(state.clone(), visual).await;
 
         // Run at ~60Hz
         sleep(Duration::from_millis(16)).await;

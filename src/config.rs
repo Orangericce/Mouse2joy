@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]

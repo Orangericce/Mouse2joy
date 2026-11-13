@@ -39,16 +39,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Start joystick emulator (runs in background)
     let js_state = app_state.clone();
+    let visual = ui::shared_visual();
     tokio::spawn(async move {
-        if let Err(e) = joystick_emulator::run_joystick_emulator(js_state).await {
+        if let Err(e) = joystick_emulator::run_joystick_emulator(js_state, &visual).await {
             log::error!("Joystick emulator error: {}", e);
         }
-    });
-
-    // Start trigger listener (runs in background)
-    let trigger_state = app_state.clone();
-    tokio::spawn(async move {
-        device_manager::run_trigger_listener(trigger_state).await;
     });
 
     // Extract initial state for UI (while we have a runtime)

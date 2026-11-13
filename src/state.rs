@@ -48,4 +48,10 @@ impl AppState {
             release_audio_enabled: self.release_audio_enabled,
         }
     }
+
+    /// Reset motion deltas (called after they have been consumed)
+    pub fn reset_mouse_deltas(&mut self) {
+        self.mouse_dx = 0;
+        self.mouse_dy = 0;
+    }
 }

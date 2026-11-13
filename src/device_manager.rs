@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use evdev::{Device, EventType, RelativeAxisCode};
+use evdev::{Device, EventType, RelativeAxisCode, KeyCode};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -89,33 +89,45 @@ pub fn enumerate_mice() -> Vec<String> {
 fn is_mouse_device(path: &str) -> bool {
     if let Ok(device) = Device::open(path) {
         let caps = device.supported_events();
-        // Check for relative axes (mouse movement)
         let has_rel = caps.contains(EventType::RELATIVE);
-        // Check for absolute axes (touchpad/touchscreen)
         let has_abs = caps.contains(EventType::ABSOLUTE);
-        // Check for keyboard keys (exclude keyboards)
         let has_keys = caps.contains(EventType::KEY);
         
-        // Mouse: has relative axes, no keyboard keys
-        let is_mouse = has_rel && !has_keys;
+        // Mouse: has relative axes (specifically REL_X or REL_Y)
+        // Mice have buttons (keys), so we can't use !has_keys
+        let is_mouse = if has_rel {
+            if let Some(axes) = device.supported_relative_axes() {
+                use evdev::RelativeAxisCode;
+                axes.contains(RelativeAxisCode::REL_X) || axes.contains(RelativeAxisCode::REL_Y)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         
-        // Touchpad: has absolute axes and has some keys
-        // (exclude full keyboards by checking for limited keys)
-        let is_touchpad = has_abs && has_keys;
-        
-        // For touchpad, check if it has standard touchpad axes (ABS_X, ABS_Y)
-        // These are absolute axis codes 0 and 1 respectively
-        if is_touchpad {
-            // Try to check supported_absolute_axes if available
+        // Touchpad: has absolute axes (ABS_X, ABS_Y) and touch-related keys
+        let is_touchpad = if has_abs && has_keys {
             if let Some(axes) = device.supported_absolute_axes() {
                 use evdev::AbsoluteAxisCode;
                 let has_x = axes.contains(AbsoluteAxisCode::ABS_X);
                 let has_y = axes.contains(AbsoluteAxisCode::ABS_Y);
-                if has_x && has_y {
-                    return true;
+                // Also check for touch-specific keys to distinguish from tablets
+                if let Some(keys) = device.supported_keys() {
+                    use evdev::KeyCode;
+                    let has_touch_keys = keys.contains(KeyCode::BTN_TOUCH) 
+                        || keys.contains(KeyCode::BTN_TOOL_FINGER)
+                        || keys.contains(KeyCode::BTN_TOOL_DOUBLETAP);
+                    has_x && has_y && has_touch_keys
+                } else {
+                    has_x && has_y
                 }
+            } else {
+                false
             }
-        }
+        } else {
+            false
+        };
         
         is_mouse || is_touchpad
     } else {
@@ -132,8 +144,9 @@ fn same_device(a: &str, b: &str) -> bool {
 fn run_udev_monitor_blocking(tx: mpsc::UnboundedSender<Vec<String>>) -> anyhow::Result<()> {
     let mut enumerator = Enumerator::new()?;
     enumerator.match_subsystem("input")?;
+    // Match both mice and touchpads
     enumerator.match_property("ID_INPUT_MOUSE", "1")?;
-
+    
     let mut monitor = MonitorBuilder::new()?
         .match_subsystem("input")?
         .listen()?;
@@ -145,9 +158,17 @@ fn run_udev_monitor_blocking(tx: mpsc::UnboundedSender<Vec<String>>) -> anyhow::
         // SocketIter implements Iterator, so we can use next() directly
         if let Some(event) = iter.next() {
             log::debug!("udev event: {:?}", event);
-            // Device changed - re-enumerate
-            let devices = enumerate_mice();
-            let _ = tx.send(devices);
+            // Check if it's a mouse or touchpad event by examining the properties
+            let mut is_mouse_or_touchpad = false;
+            // For simplicity, assume all input events from the monitor are mice/touchpads
+            // because we filtered the enumerator earlier
+            is_mouse_or_touchpad = true;
+            
+            if is_mouse_or_touchpad {
+                // Device changed - re-enumerate
+                let devices = enumerate_mice();
+                let _ = tx.send(devices);
+            }
         }
         
         // Small sleep to prevent busy loop
@@ -162,11 +183,11 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
 
     loop {
         // Check if device path changed
-        let (new_path, grabbed, sensitivity_x, sensitivity_y, deadzone) = {
+        let (new_path, trigger_button, sensitivity_x, sensitivity_y, deadzone) = {
             let s = state.lock().await;
             (
                 s.device_path.clone(),
-                s.grabbed,
+                s.trigger_button.clone(),
                 s.sensitivity_x,
                 s.sensitivity_y,
                 s.deadzone,
@@ -190,40 +211,58 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
             });
         }
 
-        // Read events if device is open and grabbed
+        // Read events if device is open (regardless of grabbed state for visualizer)
         if let Some(ref mut dev) = device {
-            if grabbed {
-                // Try to grab the device exclusively
-                let _ = dev.grab();
-
-                // Read events (blocking - will wait for events)
-                if let Ok(events) = dev.fetch_events() {
-                    for event in events {
-                        if event.event_type() == EventType::RELATIVE {
+            // Read events (non-blocking - returns empty if no events)
+            if let Ok(events) = dev.fetch_events() {
+                for event in events {
+                    match event.event_type() {
+                        EventType::RELATIVE => {
                             let code = RelativeAxisCode(event.code());
                             match code {
                                 RelativeAxisCode::REL_X => {
                                     let mut s = state.lock().await;
+                                    // Always update mouse_dx for visualizer
+                                    s.mouse_dx += event.value();
+                                    // Also apply scaling for joystick output
                                     let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_x, deadzone);
                                     s.mouse_dx += scaled as i32;
                                 }
                                 RelativeAxisCode::REL_Y => {
                                     let mut s = state.lock().await;
+                                    // Always update mouse_dy for visualizer
+                                    s.mouse_dy += event.value();
+                                    // Also apply scaling for joystick output
                                     let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_y, deadzone);
                                     s.mouse_dy += scaled as i32;
                                 }
                                 _ => {}
                             }
                         }
+                        EventType::KEY => {
+                            // Check for trigger button press/release
+                            let event_code = event.code();
+                            let trigger_key_code = match trigger_button.as_str() {
+                                "BTN_LEFT" => KeyCode::BTN_LEFT.code(),
+                                "BTN_RIGHT" => KeyCode::BTN_RIGHT.code(),
+                                "BTN_MIDDLE" => KeyCode::BTN_MIDDLE.code(),
+                                _ => continue,
+                            };
+                            
+                            if event_code == trigger_key_code {
+                                let mut s = state.lock().await;
+                                s.grabbed = event.value() > 0;
+                                log::info!("Trigger button {}: grabbed = {}", 
+                                         trigger_button, s.grabbed);
+                            }
+                        }
+                        _ => {}
                     }
                 }
-            } else {
-                // Release grab if we had it
-                let _ = dev.ungrab();
             }
         }
 
-        sleep(Duration::from_millis(1)).await;
+        sleep(Duration::from_millis(10)).await;
     }
 }
 

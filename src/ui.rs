@@ -1,17 +1,60 @@
-use rune::{
-    AppSpec, Color, Cx, Drag, El, KeyEvent, Key, TextStyle, Tx, Shadow,
-    col, el, row, text,
-};
-use crate::state::AppState;
-use crate::config::Config;
-use std::sync::OnceLock;
-use crate::device_manager;
+// Lock-free shared visual state for joystick knob position (-1.0 to 1.0)
+pub struct VisualState {
+    pub knob_x: std::sync::atomic::AtomicU32,
+    pub knob_y: std::sync::atomic::AtomicU32,
+    pub grabbed: std::sync::atomic::AtomicBool,
+}
 
-// Text styles
-const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
-const LABEL_STYLE: TextStyle = TextStyle::new(12.0, 500.0);
-const VALUE_STYLE: TextStyle = TextStyle::new(12.0, 450.0);
-const SMALL_STYLE: TextStyle = TextStyle::new(11.0, 400.0);
+impl VisualState {
+    pub fn new() -> Self {
+        VisualState {
+            knob_x: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            knob_y: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            grabbed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub fn set_knob(&self, x: f32, y: f32) {
+        use std::sync::atomic::Ordering;
+        self.knob_x.store(x.to_bits(), Ordering::Relaxed);
+        self.knob_y.store(y.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn knob(&self) -> (f32, f32) {
+        use std::sync::atomic::Ordering;
+        (
+            f32::from_bits(self.knob_x.load(Ordering::Relaxed)),
+            f32::from_bits(self.knob_y.load(Ordering::Relaxed)),
+        )
+    }
+
+    pub fn set_grabbed(&self, grabbed: bool) {
+        use std::sync::atomic::Ordering;
+        self.grabbed.store(grabbed, Ordering::Relaxed);
+    }
+
+    pub fn is_grabbed(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        self.grabbed.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for VisualState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Global handle to the shared visual state, so the UI poll (which cannot await
+// the tokio mutex) can read the latest knob position without blocking.
+pub static VISUAL: OnceLock<std::sync::Arc<VisualState>> = OnceLock::new();
+
+/// Create (once) and return the shared visual state handle.
+pub fn shared_visual() -> std::sync::Arc<VisualState> {
+    VISUAL
+        .get_or_init(|| std::sync::Arc::new(VisualState::new()))
+        .clone()
+}
 
 #[derive(Clone)]
 pub struct UiState {
@@ -27,6 +70,11 @@ pub struct UiState {
     pub trigger_listening: bool,
     // Runtime state from shared AppState
     pub grabbed: bool,
+    pub mouse_dx: i32,
+    pub mouse_dy: i32,
+    // Normalized knob position for the visualizer (-1.0 to 1.0), synced from VisualState
+    pub knob_x: f32,
+    pub knob_y: f32,
 }
 
 impl Default for UiState {
@@ -43,9 +91,28 @@ impl Default for UiState {
             device_list: Vec::new(),
             trigger_listening: false,
             grabbed: false,
+            mouse_dx: 0,
+            mouse_dy: 0,
+            knob_x: 0.0,
+            knob_y: 0.0,
         }
     }
 }
+
+use rune::{
+    AppSpec, Color, Cx, Drag, El, KeyEvent, Key, TextStyle, Tx, Shadow,
+    col, el, row, text,
+};
+use crate::state::AppState;
+use crate::config::Config;
+use std::sync::OnceLock;
+use crate::device_manager;
+
+// Text styles
+const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
+const LABEL_STYLE: TextStyle = TextStyle::new(12.0, 500.0);
+const VALUE_STYLE: TextStyle = TextStyle::new(12.0, 450.0);
+const SMALL_STYLE: TextStyle = TextStyle::new(11.0, 400.0);
 
 impl From<AppState> for UiState {
     fn from(state: AppState) -> Self {
@@ -61,6 +128,10 @@ impl From<AppState> for UiState {
             device_list: Vec::new(),
             trigger_listening: false,
             grabbed: state.grabbed,
+            mouse_dx: state.mouse_dx,
+            mouse_dy: state.mouse_dy,
+            knob_x: 0.0,
+            knob_y: 0.0,
         }
     }
 }
@@ -118,10 +189,18 @@ fn ui_init() -> UiState {
     INITIAL_STATE.get().cloned().unwrap_or_default()
 }
 
-fn poll_shared_state(state: &mut UiState, now: f64, _tx: &mut Tx) -> bool {
-    // Sync grabbed state from shared AppState periodically
-    // For now, we just return true to keep polling
-    now > 0.0
+fn poll_shared_state(state: &mut UiState, _now: f64, _tx: &mut Tx) -> bool {
+    // Read the latest knob position and grab state from the lock-free shared
+    // VisualState. This is updated by the joystick emulator task on every
+    // frame, so the UI visualizer stays in sync without needing to await the
+    // tokio Mutex.
+    if let Some(visual) = VISUAL.get() {
+        let (kx, ky) = visual.knob();
+        state.knob_x = kx;
+        state.knob_y = ky;
+        state.grabbed = visual.is_grabbed();
+    }
+    true
 }
 
 fn on_key(state: &mut UiState, event: &KeyEvent, _tx: &mut Tx) -> bool {
@@ -191,7 +270,7 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
                 )
                 .child(
                     // Joystick indicator - larger circle, smaller dot
-                    create_joystick_canvas(panel_bg, panel_border, accent, text_secondary, state.grabbed)
+                    create_joystick_canvas(panel_bg, panel_border, accent, text_secondary, state.grabbed, state.knob_x, state.knob_y)
                 )
         )
         .child(
@@ -265,9 +344,11 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
 fn create_joystick_canvas(
     _panel_bg: Color,
     panel_border: Color,
-    accent: Color,
+    _accent: Color,
     _text_secondary: Color,
     grabbed: bool,
+    knob_x: f32,
+    knob_y: f32,
 ) -> El {
     // Pure black background for joystick
     let bg = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
@@ -277,7 +358,12 @@ fn create_joystick_canvas(
     let stick_radius = 160.0;  // Larger circle
     let knob_radius = 16.0;    // Smaller dot
     let grabbed_color = Color { r: 0.2, g: 0.8, b: 0.3, a: 1.0 };
-    let ungrabbed_color = Color { r: 0.8, g: 0.3, b: 0.3, a: 1.0 };
+    let _ungrabbed_color = Color { r: 0.8, g: 0.3, b: 0.3, a: 1.0 };
+
+    // Map normalized -1.0..=1.0 knob position to pixel offset within the stick.
+    let travel = stick_radius - knob_radius;
+    let knob_offset_x = knob_x * travel;
+    let knob_offset_y = knob_y * travel;
 
     el()
         .key("joystick_canvas")
@@ -310,21 +396,21 @@ fn create_joystick_canvas(
         .child(
             // Knob - smaller dot in center, color changes based on grabbed state
             el()
-                .absolute(center_x - knob_radius, center_y - knob_radius)
+                .absolute(center_x - knob_radius + knob_offset_x, center_y - knob_radius + knob_offset_y)
                 .size(knob_radius * 2.0, knob_radius * 2.0)
                 .radius(knob_radius)
-                .fill(if grabbed { grabbed_color } else { accent })
+                .fill(if grabbed { grabbed_color } else { Color { r: 0.35, g: 0.55, b: 1.0, a: 1.0 } })
         )
 }
 
 fn create_device_selector(
     device_path: &Option<String>,
-    device_list: &[String],
+    _device_list: &[String],
     panel_bg: Color,
     panel_border: Color,
-    text_primary: Color,
+    _text_primary: Color,
     text_secondary: Color,
-    accent: Color,
+    _accent: Color,
 ) -> El {
     let display_text = device_path
         .as_ref()
@@ -357,7 +443,7 @@ fn create_device_selector(
                 }
             }
         })
-        .child(text(display_text).font(LABEL_STYLE).color(text_primary))
+        .child(text(display_text).font(LABEL_STYLE).color(_text_primary))
         .child(el().grow(1.0))
         .child(text("▼").font(SMALL_STYLE).color(text_secondary))
 }
@@ -525,7 +611,7 @@ fn create_button(
     panel_bg: Color,
     panel_border: Color,
     text_primary: Color,
-    accent: Color,
+    _accent: Color,
 ) -> El {
     let label_key = label.replace(" ", "_").to_lowercase();
 
