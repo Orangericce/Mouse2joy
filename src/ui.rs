@@ -5,6 +5,7 @@ use rune::{
 use crate::state::AppState;
 use crate::config::Config;
 use std::sync::OnceLock;
+use crate::device_manager;
 
 // Text styles
 const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
@@ -69,7 +70,7 @@ pub fn run_ui(initial_state: AppState) -> anyhow::Result<()> {
     // Convert to UI state and store in global for the init fn
     let mut ui_state: UiState = initial_state.into();
     // Populate device list
-    ui_state.device_list = enumerate_mice();
+    ui_state.device_list = device_manager::enumerate_mice();
     let _ = INITIAL_STATE.set(ui_state.clone());
 
     let spec = AppSpec::<UiState> {
@@ -260,9 +261,9 @@ fn create_device_selector(
     device_list: &[String],
     panel_bg: Color,
     panel_border: Color,
-    _text_primary: Color,
-    _text_secondary: Color,
-    _accent: Color,
+    text_primary: Color,
+    text_secondary: Color,
+    accent: Color,
 ) -> El {
     let display_text = device_path
         .as_ref()
@@ -291,16 +292,16 @@ fn create_device_selector(
                 log::info!("Selected device: {:?}", s.device_path);
             }
         })
-        .child(text(display_text).font(LABEL_STYLE).color(_text_primary))
+        .child(text(display_text).font(LABEL_STYLE).color(text_primary))
         .child(el().grow(1.0))
-        .child(text("▼").font(SMALL_STYLE).color(_text_secondary))
+        .child(text("▼").font(SMALL_STYLE).color(text_secondary))
 }
 
 fn create_slider(
     label: &str,
     value: f32,
-    _text_primary: Color,
-    _text_secondary: Color,
+    text_primary: Color,
+    text_secondary: Color,
     accent: Color,
     slider_track: Color,
     slider_knob: Color,
@@ -365,13 +366,13 @@ fn create_slider(
 }
 
 fn create_trigger_button(
-    _trigger: &str,
-    _listening: bool,
-    _panel_bg: Color,
-    _panel_border: Color,
+    trigger: &str,
+    listening: bool,
+    panel_bg: Color,
+    panel_border: Color,
     _text_primary: Color,
     accent: Color,
-    _text_secondary: Color,
+    text_secondary: Color,
 ) -> El {
     let (btn_bg, btn_text, btn_border, text_color) = if listening {
         (accent, "Press any key...", accent, Color::WHITE)
@@ -398,8 +399,8 @@ fn create_trigger_button(
 fn create_toggle(
     label: &str,
     enabled: bool,
-    _text_primary: Color,
-    _text_secondary: Color,
+    text_primary: Color,
+    text_secondary: Color,
     toggle_on: Color,
     toggle_off: Color,
 ) -> El {
@@ -444,9 +445,9 @@ fn create_toggle(
 
 fn create_button(
     label: &str,
-    _panel_bg: Color,
-    _panel_border: Color,
-    _text_primary: Color,
+    panel_bg: Color,
+    panel_border: Color,
+    text_primary: Color,
     accent: Color,
 ) -> El {
     let label_key = label.replace(" ", "_").to_lowercase();
@@ -498,18 +499,7 @@ fn create_button(
         .child(text(label).font(SMALL_STYLE).color(text_primary))
 }
 
-fn enumerate_mice() -> Vec<String> {
-    let mut devices = Vec::new();
-    if let Ok(entries) = std::fs::read_dir("/dev/input/by-id") {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.contains("mouse") && !name.contains("kbd") {
-                devices.push(format!("/dev/input/by-id/{}", name));
-            }
-        }
-    }
-    devices
-}
+// enumerate_mice is defined in device_manager.rs
 
 fn load_config_from_path(path: &std::path::Path) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path)?;
