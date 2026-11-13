@@ -5,6 +5,8 @@ use rune::{
 use crate::state::AppState;
 use crate::config::Config;
 use std::sync::OnceLock;
+use evdev::{Device, EventType, RelativeAxisCode};
+use crate::device_manager;
 
 // Text styles
 const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
@@ -257,19 +259,23 @@ fn create_joystick_canvas(
 
 fn create_device_selector(
     device_path: &Option<String>,
-    _device_list: &[String],
+    device_list: &[String],
     panel_bg: Color,
     panel_border: Color,
     text_primary: Color,
     text_secondary: Color,
-    _accent: Color,
+    accent: Color,
 ) -> El {
     let display_text = device_path
         .as_ref()
         .map(|s| s.as_str())
         .unwrap_or("Select mouse device");
 
-    el()
+    let selected_index = device_list.iter()
+        .position(|d| d == device_path.as_ref().unwrap_or(&String::new()))
+        .unwrap_or(0);
+
+    row()
         .key("device_selector")
         .w_full()
         .h(44.0)
@@ -278,6 +284,19 @@ fn create_device_selector(
         .border(1.0, panel_border)
         .center_y()
         .px(16.0)
+        .on_press(move |s: &mut UiState| {
+            // Toggle dropdown for device selection
+            // For now, just cycle through available devices
+            let device_list = device_manager::enumerate_mice();
+            if !device_list.is_empty() {
+                let current_idx = device_list.iter()
+                    .position(|d| Some(d) == s.device_path.as_ref())
+                    .unwrap_or(0);
+                let next_idx = (current_idx + 1) % device_list.len();
+                s.device_path = Some(device_list[next_idx].clone());
+                log::info!("Selected device: {:?}", s.device_path);
+            }
+        })
         .child(text(display_text).font(LABEL_STYLE).color(text_primary))
         .child(el().grow(1.0))
         .child(text("▼").font(SMALL_STYLE).color(text_secondary))
@@ -508,4 +527,40 @@ fn save_config_to_path(cfg: &Config, path: &std::path::Path) -> anyhow::Result<(
     let toml_str = toml::to_string_pretty(cfg)?;
     std::fs::write(path, toml_str)?;
     Ok(())
+}
+
+fn enumerate_mice() -> Vec<String> {
+    let mut devices = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/dev/input/by-id") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.contains("mouse") && !name.contains("kbd") {
+                devices.push(format!("/dev/input/by-id/{}", name));
+            }
+        }
+    }
+    // Also check /dev/input for event* devices as fallback
+    let by_path = std::path::Path::new("/dev/input");
+    if let Ok(entries) = std::fs::read_dir(by_path) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("event") {
+                let path = format!("/dev/input/{}", name);
+                // Basic check if it's a mouse device (has REL_X and REL_Y)
+                if let Ok(device) = evdev::Device::open(&path) {
+                    let caps = device.supported_events();
+                    let has_rel = caps.contains(evdev::EventType::RELATIVE);
+                    let has_keys = caps.contains(evdev::EventType::KEY);
+                    if has_rel && !has_keys {
+                        if !devices.iter().any(|d| d == &path) {
+                            devices.push(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    devices.sort();
+    devices.dedup();
+    devices
 }
