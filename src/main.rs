@@ -68,11 +68,27 @@ async fn main() -> anyhow::Result<()> {
             state.grabbed = grabbed;
             state.mouse_dx = mouse_dx;
             state.mouse_dy = mouse_dy;
+            // Save config immediately whenever UI settings change
+            let cfg = state.to_config();
+            if let Err(e) = config::save_config(&cfg) {
+                log::warn!("Failed to save config on change: {}", e);
+            }
         }
     });
 
     // Start the UI (Rune) - runs synchronously, blocks this thread
     ui::run_ui(initial_state, ui_tx)?;
+
+    // UI has exited - save config immediately (debounced saver may not have fired)
+    let final_state = {
+        let state = app_state.lock().await;
+        state.clone()
+    };
+    if let Err(e) = config::save_config(&final_state.to_config()) {
+        log::warn!("Failed to save config on exit: {}", e);
+    } else {
+        log::info!("Config saved on exit");
+    }
 
     Ok(())
 }

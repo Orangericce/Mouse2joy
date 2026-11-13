@@ -27,7 +27,7 @@ pub struct Config {
 
 fn default_sensitivity() -> f32 { 1.0 }
 fn default_deadzone() -> f32 { 0.05 }
-fn default_trigger_button() -> String { "BTN_LEFT".to_string() }
+fn default_trigger_button() -> String { "Not bound".to_string() }
 fn default_audio_enabled() -> bool { true }
 
 impl Default for Config {

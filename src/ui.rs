@@ -68,6 +68,7 @@ pub struct UiState {
     pub device_path: Option<String>,
     pub device_list: Vec<String>,
     pub trigger_listening: bool,
+    pub device_dropdown_open: bool,
     // Runtime state from shared AppState
     pub grabbed: bool,
     pub mouse_dx: i32,
@@ -83,13 +84,14 @@ impl Default for UiState {
             sensitivity_x: 1.0,
             sensitivity_y: 1.0,
             deadzone: 0.05,
-            trigger_button: "BTN_LEFT".to_string(),
+            trigger_button: "Not bound".to_string(),
             grab_audio_enabled: true,
             release_audio_enabled: true,
             system_tray_enabled: false,
             device_path: None,
             device_list: Vec::new(),
             trigger_listening: false,
+            device_dropdown_open: false,
             grabbed: false,
             mouse_dx: 0,
             mouse_dy: 0,
@@ -109,7 +111,7 @@ use std::sync::OnceLock;
 use crate::device_manager;
 
 // Text styles
-const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
+// const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
 const LABEL_STYLE: TextStyle = TextStyle::new(12.0, 500.0);
 const VALUE_STYLE: TextStyle = TextStyle::new(12.0, 450.0);
 const SMALL_STYLE: TextStyle = TextStyle::new(11.0, 400.0);
@@ -126,7 +128,8 @@ impl From<AppState> for UiState {
             system_tray_enabled: state.minimize_to_tray,
             device_path: state.device_path,
             device_list: Vec::new(),
-            trigger_listening: false,
+            trigger_listening: state.trigger_listening,
+            device_dropdown_open: false,
             grabbed: state.grabbed,
             mouse_dx: state.mouse_dx,
             mouse_dy: state.mouse_dy,
@@ -150,6 +153,7 @@ impl From<UiState> for AppState {
             grabbed: ui.grabbed,
             mouse_dx: 0,
             mouse_dy: 0,
+            trigger_listening: ui.trigger_listening,
         }
     }
 }
@@ -205,22 +209,43 @@ fn poll_shared_state(state: &mut UiState, _now: f64, _tx: &mut Tx) -> bool {
 
 fn on_key(state: &mut UiState, event: &KeyEvent, _tx: &mut Tx) -> bool {
     if state.trigger_listening {
-        match &event.key {
-            Key::Text(t) if !t.is_empty() => {
-                state.trigger_button = t.to_uppercase();
-                state.trigger_listening = false;
-                // Send updated state to shared AppState
-                if let Some(tx) = UI_TX.get() {
-                    let _ = tx.send(state.clone().into());
-                }
-                true
-            }
-            Key::Escape => {
-                state.trigger_listening = false;
-                true
-            }
-            _ => false,
+        let key_name = match &event.key {
+            Key::Escape => "Not bound".to_string(),
+            Key::Text(t) if !t.is_empty() => t.to_uppercase(),
+            Key::Enter => "ENTER".to_string(),
+            Key::Tab => "TAB".to_string(),
+            Key::Backspace => "BACKSPACE".to_string(),
+            Key::Delete => "DELETE".to_string(),
+            Key::Left => "LEFT_ARROW".to_string(),
+            Key::Right => "RIGHT_ARROW".to_string(),
+            Key::Up => "UP_ARROW".to_string(),
+            Key::Down => "DOWN_ARROW".to_string(),
+            Key::Home => "HOME".to_string(),
+            Key::End => "END".to_string(),
+            Key::PageUp => "PAGE_UP".to_string(),
+            Key::PageDown => "PAGE_DOWN".to_string(),
+            Key::Insert => "INSERT".to_string(),
+            Key::PrintScreen => "PRINT_SCREEN".to_string(),
+            Key::ScrollLock => "SCROLL_LOCK".to_string(),
+            Key::Pause => "PAUSE".to_string(),
+            Key::Function(n) => format!("F{}", n),
+            Key::ContextMenu => "CONTEXT_MENU".to_string(),
+            Key::Command(c) => format!("CMD_{}", c.to_uppercase()),
+            Key::Modifier { .. } => return false, // Ignore modifier keys alone
+            _ => return false,
+        };
+        
+        // Left/right click cannot be trigger buttons
+        if key_name == "LEFT" || key_name == "RIGHT" || key_name == "LEFT_CLICK" || key_name == "RIGHT_CLICK" {
+            return false;
         }
+        
+        state.trigger_button = key_name;
+        state.trigger_listening = false;
+        if let Some(tx) = UI_TX.get() {
+            let _ = tx.send(state.clone().into());
+        }
+        true
     } else {
         false
     }
@@ -318,8 +343,8 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
             // Config - device selector, trigger button, import/export
             col()
                 .gap(14.0)
-                .child(create_device_selector(&state.device_path, &state.device_list, panel_bg, panel_border, text_primary, text_secondary, accent))
-                .child(create_trigger_button(&state.trigger_button, state.trigger_listening, panel_bg, panel_border, text_primary, accent, text_secondary))
+                .child(create_device_selector(state, panel_bg, panel_border, text_primary, text_secondary, accent))
+                .child(create_trigger_button(state, panel_bg, panel_border, text_primary, accent, text_secondary))
                 .child(row()
                     .gap(12.0)
                     .child(create_button("Import", panel_bg, panel_border, text_primary, accent))
@@ -404,21 +429,25 @@ fn create_joystick_canvas(
 }
 
 fn create_device_selector(
-    device_path: &Option<String>,
-    _device_list: &[String],
+    state: &UiState,
     panel_bg: Color,
     panel_border: Color,
-    _text_primary: Color,
+    text_primary: Color,
     text_secondary: Color,
     _accent: Color,
 ) -> El {
-    let display_text = device_path
+    let display_text = state.device_path
         .as_ref()
         .map(|s| s.as_str())
         .unwrap_or("Select mouse device");
 
-    row()
-        .key("device_selector")
+    let mut selector = col()
+        .key("device_selector_container")
+        .w_full()
+        .gap(4.0);
+
+    let header = row()
+        .key("device_selector_header")
         .w_full()
         .h(44.0)
         .radius(8.0)
@@ -426,26 +455,52 @@ fn create_device_selector(
         .border(1.0, panel_border)
         .center_y()
         .px(16.0)
-        .on_press(move |s: &mut UiState| {
-            // Toggle dropdown for device selection
-            // For now, just cycle through available devices
-            let device_list = device_manager::enumerate_mice();
-            if !device_list.is_empty() {
-                let current_idx = device_list.iter()
-                    .position(|d| Some(d) == s.device_path.as_ref())
-                    .unwrap_or(0);
-                let next_idx = (current_idx + 1) % device_list.len();
-                s.device_path = Some(device_list[next_idx].clone());
-                log::info!("Selected device: {:?}", s.device_path);
-                // Sync to shared AppState
-                if let Some(tx) = UI_TX.get() {
-                    let _ = tx.send(s.clone().into());
-                }
-            }
+        .on_press(|s: &mut UiState| {
+            s.device_dropdown_open = !s.device_dropdown_open;
         })
-        .child(text(display_text).font(LABEL_STYLE).color(_text_primary))
+        .child(text(display_text).font(LABEL_STYLE).color(text_primary))
         .child(el().grow(1.0))
-        .child(text("▼").font(SMALL_STYLE).color(text_secondary))
+        .child(text(if state.device_dropdown_open { "▲" } else { "▼" }).font(SMALL_STYLE).color(text_secondary));
+
+    selector = selector.child(header);
+
+    if state.device_dropdown_open {
+        let mut list = col()
+            .key("device_list")
+            .w_full()
+            .fill(panel_bg)
+            .border(1.0, panel_border)
+            .radius(8.0)
+            .padding(8.0)
+            .gap(4.0);
+
+        if state.device_list.is_empty() {
+            list = list.child(text("No devices found").font(SMALL_STYLE).color(text_secondary));
+        } else {
+            for device in &state.device_list {
+                let d = device.clone();
+                list = list.child(
+                    el()
+                        .w_full()
+                        .h(32.0)
+                        .center_y()
+                        .px(8.0)
+                        .on_press(move |s: &mut UiState| {
+                            s.device_path = Some(d.clone());
+                            s.device_dropdown_open = false;
+                            // Sync
+                            if let Some(tx) = UI_TX.get() {
+                                let _ = tx.send(s.clone().into());
+                            }
+                        })
+                        .child(text(device).font(SMALL_STYLE).color(text_primary))
+                );
+            }
+        }
+        selector = selector.child(list);
+    }
+
+    selector
 }
 
 fn create_slider(
@@ -521,21 +576,26 @@ fn create_slider(
 }
 
 fn create_trigger_button(
-    trigger: &str,
-    listening: bool,
+    state: &UiState,
     panel_bg: Color,
     panel_border: Color,
     _text_primary: Color,
     accent: Color,
     text_secondary: Color,
 ) -> El {
-    let (btn_bg, btn_text, btn_border, text_color) = if listening {
-        (accent, "Press any key...", accent, Color::WHITE)
+    let btn_text = if state.trigger_listening {
+        "Press key or pick below..."
     } else {
-        (panel_bg, trigger, panel_border, accent)
+        &state.trigger_button
+    };
+    let is_listening = state.trigger_listening;
+    let (btn_bg, btn_border, text_color) = if is_listening {
+        (accent, accent, Color::WHITE)
+    } else {
+        (panel_bg, panel_border, accent)
     };
 
-    el()
+    let btn = el()
         .key("trigger_button")
         .w_full()
         .h(48.0)
@@ -545,14 +605,68 @@ fn create_trigger_button(
         .center_y()
         .px(16.0)
         .on_press(|s: &mut UiState| {
-            s.trigger_listening = true;
+            s.trigger_listening = !s.trigger_listening;
             // Sync to shared AppState
             if let Some(tx) = UI_TX.get() {
                 let _ = tx.send(s.clone().into());
             }
         })
         .child(text("Trigger Button").font(SMALL_STYLE).color(text_secondary).absolute(16.0, 6.0))
-        .child(text(btn_text).font(LABEL_STYLE).color(text_color).absolute(16.0, 26.0))
+        .child(text(btn_text).font(LABEL_STYLE).color(text_color).absolute(16.0, 26.0));
+
+    let mut container = col()
+        .key("trigger_container")
+        .w_full()
+        .gap(4.0)
+        .child(btn);
+
+    if state.trigger_listening {
+        let menu = col()
+            .key("trigger_menu")
+            .w_full()
+            .fill(panel_bg)
+            .border(1.0, panel_border)
+            .radius(8.0)
+            .padding(8.0)
+            .gap(2.0)
+            .child(text("Press a key, or pick a mouse button. Esc = Not bound.").font(SMALL_STYLE).color(text_secondary))
+            .child(trigger_option_row("Mouse Side (4)", "BTN_SIDE".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Mouse Forward (5)", "BTN_FORWARD".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Middle Click", "BTN_MIDDLE".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Mouse Extra (6)", "BTN_EXTRA".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Task Button", "BTN_TASK".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Space", "SPACE".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Enter", "ENTER".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Tab", "TAB".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Shift", "SHIFT".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Ctrl", "CTRL".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Alt", "ALT".to_string(), accent, text_secondary))
+            .child(trigger_option_row("F1", "F1".to_string(), accent, text_secondary))
+            .child(trigger_option_row("F2", "F2".to_string(), accent, text_secondary))
+            .child(trigger_option_row("F3", "F3".to_string(), accent, text_secondary))
+            .child(trigger_option_row("F4", "F4".to_string(), accent, text_secondary))
+            .child(trigger_option_row("Not bound (Esc)", "Not bound".to_string(), accent, text_secondary));
+        container = container.child(menu);
+    }
+
+    container
+}
+
+fn trigger_option_row(label: &str, value: String, accent: Color, _text_secondary: Color) -> El {
+    el()
+        .w_full()
+        .h(32.0)
+        .center_y()
+        .px(8.0)
+        .on_press(move |s: &mut UiState| {
+            s.trigger_button = value.clone();
+            s.trigger_listening = false;
+            // Sync to shared AppState
+            if let Some(tx) = UI_TX.get() {
+                let _ = tx.send(s.clone().into());
+            }
+        })
+        .child(text(label).font(SMALL_STYLE).color(accent))
 }
 
 fn create_toggle(

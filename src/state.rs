@@ -16,6 +16,8 @@ pub struct AppState {
     pub grabbed: bool,
     pub mouse_dx: i32,
     pub mouse_dy: i32,
+    // Whether the UI is listening for a trigger button binding
+    pub trigger_listening: bool,
 }
 
 impl AppState {
@@ -32,6 +34,7 @@ impl AppState {
             grabbed: false,
             mouse_dx: 0,
             mouse_dy: 0,
+            trigger_listening: false,
         }
     }
 

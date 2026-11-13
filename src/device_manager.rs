@@ -8,6 +8,98 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 use udev::{Enumerator, MonitorBuilder};
 
+/// All bindable trigger names with their evdev key codes and display labels.
+/// Order here determines display order in the trigger menu.
+const TRIGGER_TABLE: &[(&str, u16, &str)] = &[
+    ("BTN_SIDE", KeyCode::BTN_SIDE.code(), "Mouse Side (4)"),
+    ("BTN_FORWARD", KeyCode::BTN_FORWARD.code(), "Mouse Forward (5)"),
+    ("BTN_MIDDLE", KeyCode::BTN_MIDDLE.code(), "Middle Click"),
+    ("BTN_EXTRA", KeyCode::BTN_EXTRA.code(), "Mouse Extra (6)"),
+    ("BTN_TASK", KeyCode::BTN_TASK.code(), "Task Button"),
+    ("SPACE", KeyCode::KEY_SPACE.code(), "Space"),
+    ("ENTER", KeyCode::KEY_ENTER.code(), "Enter"),
+    ("TAB", KeyCode::KEY_TAB.code(), "Tab"),
+    ("SHIFT", KeyCode::KEY_LEFTSHIFT.code(), "Shift"),
+    ("CTRL", KeyCode::KEY_LEFTCTRL.code(), "Ctrl"),
+    ("ALT", KeyCode::KEY_LEFTALT.code(), "Alt"),
+    ("CAPSLOCK", KeyCode::KEY_CAPSLOCK.code(), "CapsLock"),
+    ("F1", KeyCode::KEY_F1.code(), "F1"),
+    ("F2", KeyCode::KEY_F2.code(), "F2"),
+    ("F3", KeyCode::KEY_F3.code(), "F3"),
+    ("F4", KeyCode::KEY_F4.code(), "F4"),
+    ("F5", KeyCode::KEY_F5.code(), "F5"),
+    ("F6", KeyCode::KEY_F6.code(), "F6"),
+    ("F7", KeyCode::KEY_F7.code(), "F7"),
+    ("F8", KeyCode::KEY_F8.code(), "F8"),
+    ("F9", KeyCode::KEY_F9.code(), "F9"),
+    ("F10", KeyCode::KEY_F10.code(), "F10"),
+    ("F11", KeyCode::KEY_F11.code(), "F11"),
+    ("F12", KeyCode::KEY_F12.code(), "F12"),
+];
+
+/// Maps string representations of trigger buttons/keys to evdev key codes.
+/// Rejects BTN_LEFT and BTN_RIGHT (returns None).
+pub fn parse_trigger_key_code(name: &str) -> Option<u16> {
+    let s = name.trim().to_uppercase();
+    // Disallowed
+    match s.as_str() {
+        "NOT BOUND" | "" | "NONE" => return None,
+        "BTN_LEFT" | "BTN_RIGHT" | "LEFT CLICK" | "RIGHT CLICK" | "LEFT" | "RIGHT" => return None,
+        _ => {}
+    }
+
+    // Aliases -> canonical name
+    let canonical = match s.as_str() {
+        // Mouse button aliases
+        "MOUSE 4" | "MOUSE4" | "SIDE" => "BTN_SIDE",
+        "MOUSE 5" | "MOUSE5" | "FORWARD" => "BTN_FORWARD",
+        "MIDDLE CLICK" | "WHEEL CLICK" | "MIDDLE" => "BTN_MIDDLE",
+        "MOUSE 6" | "EXTRA" => "BTN_EXTRA",
+        "TASK" => "BTN_TASK",
+        // Keyboard aliases
+        "SHIFT" | "LEFTSHIFT" => "KEY_LEFTSHIFT",
+        "RIGHTSHIFT" => "KEY_RIGHTSHIFT",
+        "CTRL" | "LEFTCTRL" => "KEY_LEFTCTRL",
+        "RIGHTCTRL" => "KEY_RIGHTCTRL",
+        "ALT" | "LEFTALT" => "KEY_LEFTALT",
+        "RIGHTALT" => "KEY_RIGHTALT",
+        "CAPSLOCK" => "KEY_CAPSLOCK",
+        "SPACE" => "KEY_SPACE",
+        "ENTER" | "RETURN" => "KEY_ENTER",
+        "TAB" => "KEY_TAB",
+        // Function keys
+        "F1" => "KEY_F1", "F2" => "KEY_F2", "F3" => "KEY_F3", "F4" => "KEY_F4",
+        "F5" => "KEY_F5", "F6" => "KEY_F6", "F7" => "KEY_F7", "F8" => "KEY_F8",
+        "F9" => "KEY_F9", "F10" => "KEY_F10", "F11" => "KEY_F11", "F12" => "KEY_F12",
+        // Letters A-Z
+        "A" => "KEY_A", "B" => "KEY_B", "C" => "KEY_C", "D" => "KEY_D", "E" => "KEY_E",
+        "F" => "KEY_F", "G" => "KEY_G", "H" => "KEY_H", "I" => "KEY_I", "J" => "KEY_J",
+        "K" => "KEY_K", "L" => "KEY_L", "M" => "KEY_M", "N" => "KEY_N", "O" => "KEY_O",
+        "P" => "KEY_P", "Q" => "KEY_Q", "R" => "KEY_R", "S" => "KEY_S", "T" => "KEY_T",
+        "U" => "KEY_U", "V" => "KEY_V", "W" => "KEY_W", "X" => "KEY_X", "Y" => "KEY_Y",
+        "Z" => "KEY_Z",
+        // Numbers 0-9
+        "0" => "KEY_0", "1" => "KEY_1", "2" => "KEY_2", "3" => "KEY_3", "4" => "KEY_4",
+        "5" => "KEY_5", "6" => "KEY_6", "7" => "KEY_7", "8" => "KEY_8", "9" => "KEY_9",
+        other => other,
+    };
+
+    // Look up canonical name in table
+    TRIGGER_TABLE
+        .iter()
+        .find(|(n, _, _)| *n == canonical)
+        .map(|(_, c, _)| *c)
+}
+
+/// Reverse lookup: evdev key code -> canonical trigger name (e.g., "BTN_SIDE").
+/// Returns None if the code isn't in the bindable table.
+pub fn key_code_to_name(code: u16) -> Option<&'static str> {
+    TRIGGER_TABLE
+        .iter()
+        .find(|(_, c, _)| *c == code)
+        .map(|(n, _, _)| *n)
+}
+
 /// Runs a background task that watches for mouse devices being added or removed.
 /// Uses `udev` to listen for `add`/`remove` events and `evdev` to read mouse motion.
 pub async fn run_device_watcher(state: Arc<Mutex<AppState>>) {
@@ -46,8 +138,6 @@ pub async fn run_device_watcher(state: Arc<Mutex<AppState>>) {
     // Handle device list updates from udev monitor
     while let Some(devices) = rx.recv().await {
         log::info!("Device list updated: {:?}", devices);
-        // In a full implementation, we'd notify the UI here
-        // For now, the UI polls enumerate_mice() on its own
     }
 }
 
@@ -147,7 +237,7 @@ fn run_udev_monitor_blocking(tx: mpsc::UnboundedSender<Vec<String>>) -> anyhow::
     // Match both mice and touchpads
     enumerator.match_property("ID_INPUT_MOUSE", "1")?;
     
-    let mut monitor = MonitorBuilder::new()?
+    let monitor = MonitorBuilder::new()?
         .match_subsystem("input")?
         .listen()?;
 
@@ -158,17 +248,9 @@ fn run_udev_monitor_blocking(tx: mpsc::UnboundedSender<Vec<String>>) -> anyhow::
         // SocketIter implements Iterator, so we can use next() directly
         if let Some(event) = iter.next() {
             log::debug!("udev event: {:?}", event);
-            // Check if it's a mouse or touchpad event by examining the properties
-            let mut is_mouse_or_touchpad = false;
-            // For simplicity, assume all input events from the monitor are mice/touchpads
-            // because we filtered the enumerator earlier
-            is_mouse_or_touchpad = true;
-            
-            if is_mouse_or_touchpad {
-                // Device changed - re-enumerate
-                let devices = enumerate_mice();
-                let _ = tx.send(devices);
-            }
+            // Device changed - re-enumerate
+            let devices = enumerate_mice();
+            let _ = tx.send(devices);
         }
         
         // Small sleep to prevent busy loop
@@ -176,7 +258,10 @@ fn run_udev_monitor_blocking(tx: mpsc::UnboundedSender<Vec<String>>) -> anyhow::
     }
 }
 
-/// Read mouse motion events from the selected device
+/// Read mouse motion events from the selected device.
+/// Mirrors the Python reference: uses `mouse.grab()`/`mouse.ungrab()` to
+/// exclusively capture the device when grabbed, and reads raw REL_X/REL_Y
+/// events to drive the virtual joystick axes.
 async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
     let mut current_device: Option<String> = None;
     let mut device: Option<Device> = None;
@@ -196,6 +281,10 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
 
         // Reopen device if path changed
         if new_path != current_device {
+            // Ungrab old device before dropping it
+            if let Some(ref mut d) = device {
+                let _ = d.ungrab();
+            }
             current_device = new_path.clone();
             device = current_device.as_ref().and_then(|p| {
                 match Device::open(p) {
@@ -211,53 +300,82 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
             });
         }
 
-        // Read events if device is open (regardless of grabbed state for visualizer)
+        // Read events if device is open
         if let Some(ref mut dev) = device {
-            // Read events (non-blocking - returns empty if no events)
-            if let Ok(events) = dev.fetch_events() {
-                for event in events {
-                    match event.event_type() {
-                        EventType::RELATIVE => {
-                            let code = RelativeAxisCode(event.code());
-                            match code {
-                                RelativeAxisCode::REL_X => {
-                                    let mut s = state.lock().await;
-                                    // Always update mouse_dx for visualizer
-                                    s.mouse_dx += event.value();
-                                    // Also apply scaling for joystick output
-                                    let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_x, deadzone);
-                                    s.mouse_dx += scaled as i32;
-                                }
-                                RelativeAxisCode::REL_Y => {
-                                    let mut s = state.lock().await;
-                                    // Always update mouse_dy for visualizer
-                                    s.mouse_dy += event.value();
-                                    // Also apply scaling for joystick output
-                                    let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_y, deadzone);
-                                    s.mouse_dy += scaled as i32;
-                                }
-                                _ => {}
-                            }
-                        }
-                        EventType::KEY => {
-                            // Check for trigger button press/release
-                            let event_code = event.code();
-                            let trigger_key_code = match trigger_button.as_str() {
-                                "BTN_LEFT" => KeyCode::BTN_LEFT.code(),
-                                "BTN_RIGHT" => KeyCode::BTN_RIGHT.code(),
-                                "BTN_MIDDLE" => KeyCode::BTN_MIDDLE.code(),
-                                _ => continue,
-                            };
-                            
-                            if event_code == trigger_key_code {
+            // Drain all pending events into a Vec first, so we can call
+            // dev.grab()/dev.ungrab() while iterating without overlapping
+            // mutable borrows.
+            let events: Vec<_> = dev
+                .fetch_events()
+                .map(|f| f.collect())
+                .unwrap_or_default();
+            for event in events {
+                match event.event_type() {
+                    EventType::RELATIVE => {
+                        let code = RelativeAxisCode(event.code());
+                        match code {
+                            RelativeAxisCode::REL_X => {
                                 let mut s = state.lock().await;
-                                s.grabbed = event.value() > 0;
-                                log::info!("Trigger button {}: grabbed = {}", 
-                                         trigger_button, s.grabbed);
+                                s.mouse_dx += event.value();
+                                let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_x, deadzone);
+                                s.mouse_dx += scaled as i32;
+                            }
+                            RelativeAxisCode::REL_Y => {
+                                let mut s = state.lock().await;
+                                s.mouse_dy += event.value();
+                                let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_y, deadzone);
+                                s.mouse_dy += scaled as i32;
+                            }
+                            _ => {}
+                        }
+                    }
+                    EventType::KEY => {
+                        let event_code = event.code();
+                        
+                        // Check if UI is listening for a trigger button binding
+                        let listening = {
+                            let s = state.lock().await;
+                            s.trigger_listening
+                        };
+                        
+                        if listening && event.value() == 1 {
+                            // Capture this key/button as the trigger binding
+                            if let Some(name) = key_code_to_name(event_code) {
+                                // Reject left/right click
+                                if name != "BTN_LEFT" && name != "BTN_RIGHT" {
+                                    let mut s = state.lock().await;
+                                    s.trigger_button = name.to_string();
+                                    s.trigger_listening = false;
+                                    log::info!("Trigger binding captured: {}", name);
+                                    // Sync will happen via UI_TX on next poll
+                                }
+                            }
+                            continue;
+                        }
+                        
+                        // Normal trigger handling (toggle grab)
+                        if let Some(target_code) = parse_trigger_key_code(&trigger_button) {
+                            if event_code == target_code && event.value() == 1 {
+                                // Key down - toggle grabbed state
+                                let mut s = state.lock().await;
+                                let new_grabbed = !s.grabbed;
+                                s.grabbed = new_grabbed;
+
+                                if new_grabbed {
+                                    if let Err(e) = dev.grab() {
+                                        log::warn!("Failed to grab device: {}", e);
+                                    } else {
+                                        log::info!("Grabbed device: {:?}", current_device);
+                                    }
+                                } else {
+                                    let _ = dev.ungrab();
+                                    log::info!("Ungrabbed device: {:?}", current_device);
+                                }
+                                log::info!("Trigger {} toggled grabbed = {}", trigger_button, s.grabbed);
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
         }
