@@ -5,8 +5,6 @@ use rune::{
 use crate::state::AppState;
 use crate::config::Config;
 use std::sync::OnceLock;
-use evdev::{Device, EventType, RelativeAxisCode};
-use crate::device_manager;
 
 // Text styles
 const TITLE_STYLE: TextStyle = TextStyle::new(14.0, 600.0);
@@ -262,18 +260,14 @@ fn create_device_selector(
     device_list: &[String],
     panel_bg: Color,
     panel_border: Color,
-    text_primary: Color,
-    text_secondary: Color,
-    accent: Color,
+    _text_primary: Color,
+    _text_secondary: Color,
+    _accent: Color,
 ) -> El {
     let display_text = device_path
         .as_ref()
         .map(|s| s.as_str())
         .unwrap_or("Select mouse device");
-
-    let selected_index = device_list.iter()
-        .position(|d| d == device_path.as_ref().unwrap_or(&String::new()))
-        .unwrap_or(0);
 
     row()
         .key("device_selector")
@@ -297,16 +291,16 @@ fn create_device_selector(
                 log::info!("Selected device: {:?}", s.device_path);
             }
         })
-        .child(text(display_text).font(LABEL_STYLE).color(text_primary))
+        .child(text(display_text).font(LABEL_STYLE).color(_text_primary))
         .child(el().grow(1.0))
-        .child(text("▼").font(SMALL_STYLE).color(text_secondary))
+        .child(text("▼").font(SMALL_STYLE).color(_text_secondary))
 }
 
 fn create_slider(
     label: &str,
     value: f32,
-    text_primary: Color,
-    text_secondary: Color,
+    _text_primary: Color,
+    _text_secondary: Color,
     accent: Color,
     slider_track: Color,
     slider_knob: Color,
@@ -371,13 +365,13 @@ fn create_slider(
 }
 
 fn create_trigger_button(
-    trigger: &str,
-    listening: bool,
-    panel_bg: Color,
-    panel_border: Color,
+    _trigger: &str,
+    _listening: bool,
+    _panel_bg: Color,
+    _panel_border: Color,
     _text_primary: Color,
     accent: Color,
-    text_secondary: Color,
+    _text_secondary: Color,
 ) -> El {
     let (btn_bg, btn_text, btn_border, text_color) = if listening {
         (accent, "Press any key...", accent, Color::WHITE)
@@ -404,8 +398,8 @@ fn create_trigger_button(
 fn create_toggle(
     label: &str,
     enabled: bool,
-    text_primary: Color,
-    text_secondary: Color,
+    _text_primary: Color,
+    _text_secondary: Color,
     toggle_on: Color,
     toggle_off: Color,
 ) -> El {
@@ -450,9 +444,9 @@ fn create_toggle(
 
 fn create_button(
     label: &str,
-    panel_bg: Color,
-    panel_border: Color,
-    text_primary: Color,
+    _panel_bg: Color,
+    _panel_border: Color,
+    _text_primary: Color,
     accent: Color,
 ) -> El {
     let label_key = label.replace(" ", "_").to_lowercase();
@@ -527,40 +521,4 @@ fn save_config_to_path(cfg: &Config, path: &std::path::Path) -> anyhow::Result<(
     let toml_str = toml::to_string_pretty(cfg)?;
     std::fs::write(path, toml_str)?;
     Ok(())
-}
-
-fn enumerate_mice() -> Vec<String> {
-    let mut devices = Vec::new();
-    if let Ok(entries) = std::fs::read_dir("/dev/input/by-id") {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.contains("mouse") && !name.contains("kbd") {
-                devices.push(format!("/dev/input/by-id/{}", name));
-            }
-        }
-    }
-    // Also check /dev/input for event* devices as fallback
-    let by_path = std::path::Path::new("/dev/input");
-    if let Ok(entries) = std::fs::read_dir(by_path) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("event") {
-                let path = format!("/dev/input/{}", name);
-                // Basic check if it's a mouse device (has REL_X and REL_Y)
-                if let Ok(device) = evdev::Device::open(&path) {
-                    let caps = device.supported_events();
-                    let has_rel = caps.contains(evdev::EventType::RELATIVE);
-                    let has_keys = caps.contains(evdev::EventType::KEY);
-                    if has_rel && !has_keys {
-                        if !devices.iter().any(|d| d == &path) {
-                            devices.push(path);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    devices.sort();
-    devices.dedup();
-    devices
 }
