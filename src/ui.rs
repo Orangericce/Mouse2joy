@@ -127,7 +127,7 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
 
     // Left side: Joystick indicator (top) + Options (bottom)
     let left_panel = col()
-        .w(480.0)
+        .grow(1.0)
         .h_full()
         .gap(20.0)
         .padding(20.0)
@@ -184,8 +184,8 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
                 .child(create_trigger_button(&state.trigger_button, state.trigger_listening, panel_bg, panel_border, text_primary, accent, text_secondary))
                 .child(row()
                     .gap(12.0)
-                    .child(create_button("Import Config", panel_bg, panel_border, text_primary, accent))
-                    .child(create_button("Export Config", panel_bg, panel_border, text_primary, accent))
+                    .child(create_button("Import", panel_bg, panel_border, text_primary, accent))
+                    .child(create_button("Export", panel_bg, panel_border, text_primary, accent))
                 )
         );
 
@@ -204,11 +204,13 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
 }
 
 fn create_joystick_canvas(
-    panel_bg: Color,
+    _panel_bg: Color,
     panel_border: Color,
     accent: Color,
     _text_secondary: Color,
 ) -> El {
+    // Pure black background for joystick
+    let bg = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
     // Center position for joystick
     let center_x = 220.0;
     let center_y = 220.0;
@@ -220,7 +222,7 @@ fn create_joystick_canvas(
         .size(440.0, 440.0)
         .radius(12.0)
         .clip_rounded(12.0)
-        .fill(panel_bg)
+        .fill(bg)
         .border(1.0, panel_border)
         .child(
             // Outer ring - larger
@@ -438,14 +440,14 @@ fn create_button(
 
     row()
         .w_full()
-        .h(40.0)
+        .h(32.0)
         .center()
-        .radius(8.0)
+        .radius(6.0)
         .fill(panel_bg)
         .border(1.0, panel_border)
         .on_press(move |s: &mut UiState| {
             match label_key.as_str() {
-                "import_config" => {
+                "import" => {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("TOML", &["toml"])
                         .pick_file() {
@@ -461,7 +463,7 @@ fn create_button(
                         }
                     }
                 }
-                "export_config" => {
+                "export" => {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("TOML", &["toml"])
                         .save_file() {
@@ -480,7 +482,7 @@ fn create_button(
                 _ => {}
             }
         })
-        .child(text(label).font(LABEL_STYLE).color(text_primary))
+        .child(text(label).font(SMALL_STYLE).color(text_primary))
 }
 
 fn enumerate_mice() -> Vec<String> {
