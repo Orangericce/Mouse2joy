@@ -60,14 +60,12 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         while let Some(new_state) = ui_rx.recv().await {
             let mut state = sync_state.lock().await;
-            // Preserve runtime state
-            let grabbed = state.grabbed;
-            let mouse_dx = state.mouse_dx;
-            let mouse_dy = state.mouse_dy;
+            // The UI state already has the correct `grabbed` value from VisualState
+            // (via poll_shared_state -> UiState -> AppState conversion).
+            // DO NOT preserve `grabbed` from old state - it would overwrite the correct value.
+            // mouse_dx/mouse_dy are consumed by joystick_emulator and reset to 0;
+            // the UI sends 0, so no need to preserve them either.
             *state = new_state;
-            state.grabbed = grabbed;
-            state.mouse_dx = mouse_dx;
-            state.mouse_dy = mouse_dy;
             // Save config immediately whenever UI settings change
             let cfg = state.to_config();
             if let Err(e) = config::save_config(&cfg) {

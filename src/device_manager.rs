@@ -190,9 +190,11 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
 
         // Reopen device if path changed
         if new_path != current_device {
+            log::info!("Device path changed: {:?} -> {:?}", current_device, new_path);
             // Ungrab old device before dropping it
             if let Some(ref mut d) = device {
                 let _ = d.ungrab();
+                log::debug!("Ungrabbed old device");
             }
             // Reset grab state when device changes (can't grab new device yet)
             {

@@ -19,9 +19,18 @@ pub struct JoystickEmulator {
     // Current axis positions (float for smooth centering) - used for uinput
     x_pos: f32,
     y_pos: f32,
-    // Visual position - always tracks mouse movement for UI display, even when not grabbed
+    // Visual position for UI display
+    // When NOT grabbed: tracks raw mouse movement (for device identification)
+    // When GRABBED: tracks actual joystick position (x_pos/y_pos) with centering
     visual_x: f32,
     visual_y: f32,
+    // Raw mouse accumulation for device identification when not grabbed
+    raw_visual_x: f32,
+    raw_visual_y: f32,
+    // Track previous grab state to detect transitions
+    was_grabbed: bool,
+    // Track device path to detect device changes and reset state
+    last_device_path: Option<String>,
 }
 
 impl JoystickEmulator {
@@ -55,34 +64,58 @@ impl JoystickEmulator {
             y_pos: 0.0,
             visual_x: 0.0,
             visual_y: 0.0,
+            raw_visual_x: 0.0,
+            raw_visual_y: 0.0,
+            was_grabbed: false,
+            last_device_path: None,
         })
     }
 
     /// Update joystick axes based on mouse deltas from AppState and update visual state.
     /// This should be called in a loop at a regular interval (e.g., 60Hz).
-    /// The visual knob position ALWAYS reflects mouse movement (even when not grabbed),
-    /// so the user can see which device is active. The virtual uinput device only
-    /// emits axis values when grabbed.
+    /// Visual behavior:
+    ///   - When NOT grabbed: shows raw mouse movement (for device identification)
+    ///   - When GRABBED: shows actual joystick position with spring-back centering
+    /// The virtual uinput device only emits axis values when grabbed.
     /// Also applies spring-back centering (matching Python reference).
     pub async fn update(&mut self, state: Arc<Mutex<AppState>>, visual: &VisualState) {
-        let (dx, dy, grabbed, sensitivity_x, sensitivity_y, center_strength_x, center_strength_y, center_while_grabbed) = {
+        let (dx, dy, grabbed, device_path, sensitivity_x, sensitivity_y, center_strength_x, center_strength_y, center_while_grabbed) = {
             let mut s = state.lock().await;
             let dx = s.mouse_dx;
             let dy = s.mouse_dy;
             // Reset deltas after reading
             s.mouse_dx = 0;
             s.mouse_dy = 0;
-            (dx, dy, s.grabbed, s.sensitivity_x, s.sensitivity_y, s.center_strength_x, s.center_strength_y, s.center_while_grabbed)
+            (dx, dy, s.grabbed, s.device_path.clone(), s.sensitivity_x, s.sensitivity_y, s.center_strength_x, s.center_strength_y, s.center_while_grabbed)
         };
 
-        // Always apply mouse deltas to visual position (for UI display, even when not grabbed)
-        // This lets the user see mouse movement to identify the correct device
+        // Check for device path change and reset state if needed
+        if self.last_device_path != device_path {
+            log::info!("Joystick emulator: device changed {:?} -> {:?}, resetting state", self.last_device_path, device_path);
+            self.last_device_path = device_path;
+            self.reset_position();
+            // Also update visual to show centered state
+            visual.set_knob(0.0, 0.0);
+        }
+
+        // Debug: log grab state changes
+        if grabbed != self.was_grabbed {
+            log::debug!("Joystick emulator: grabbed changed: {} -> {}", self.was_grabbed, grabbed);
+        }
+
         let scale = 100.0;
-        self.visual_x += dx as f32 * sensitivity_x * scale;
-        self.visual_y += dy as f32 * sensitivity_y * scale;
-        // Clamp visual position to axis range
-        self.visual_x = self.visual_x.clamp(self.axis_min as f32, self.axis_max as f32);
-        self.visual_y = self.visual_y.clamp(self.axis_min as f32, self.axis_max as f32);
+
+        // Detect grab state transitions
+        let _grab_pressed = grabbed && !self.was_grabbed;
+        let grab_released = !grabbed && self.was_grabbed;
+        self.was_grabbed = grabbed;
+
+        // Always accumulate raw mouse movement for device identification
+        // (when not grabbed, this is what the user sees)
+        self.raw_visual_x += dx as f32 * sensitivity_x * scale;
+        self.raw_visual_y += dy as f32 * sensitivity_y * scale;
+        self.raw_visual_x = self.raw_visual_x.clamp(self.axis_min as f32, self.axis_max as f32);
+        self.raw_visual_y = self.raw_visual_y.clamp(self.axis_min as f32, self.axis_max as f32);
 
         // Spring-back centering for actual joystick position (uinput)
         // Runs when center_while_grabbed is true, or when not grabbed
@@ -105,9 +138,24 @@ impl JoystickEmulator {
         self.x_pos = self.x_pos.clamp(self.axis_min as f32, self.axis_max as f32);
         self.y_pos = self.y_pos.clamp(self.axis_min as f32, self.axis_max as f32);
 
-        // Normalize visual position to -1.0 to 1.0 for visualizer
-        let visual_x = self.visual_x / 32767.0;
-        let visual_y = self.visual_y / 32767.0;
+        // Determine visual position based on grab state:
+        // - Not grabbed: show raw mouse movement (device identification)
+        // - Grabbed: show actual joystick position (with centering)
+        let (display_x, display_y) = if grabbed {
+            (self.x_pos, self.y_pos)
+        } else {
+            (self.raw_visual_x, self.raw_visual_y)
+        };
+
+        // On grab release, reset raw visual so it starts fresh next time
+        if grab_released {
+            self.raw_visual_x = 0.0;
+            self.raw_visual_y = 0.0;
+        }
+
+        // Normalize to -1.0 to 1.0 for visualizer
+        let visual_x = display_x / 32767.0;
+        let visual_y = display_y / 32767.0;
 
         // Always update visual state with visual position and grab status
         visual.set_knob(visual_x, visual_y);
@@ -136,6 +184,9 @@ impl JoystickEmulator {
         self.y_pos = 0.0;
         self.visual_x = 0.0;
         self.visual_y = 0.0;
+        self.raw_visual_x = 0.0;
+        self.raw_visual_y = 0.0;
+        self.was_grabbed = false;
     }
 
     /// Press the trigger button on the virtual joystick
@@ -158,6 +209,8 @@ impl JoystickEmulator {
         self.y_pos = 0.0;
         self.visual_x = 0.0;
         self.visual_y = 0.0;
+        self.raw_visual_x = 0.0;
+        self.raw_visual_y = 0.0;
         self.device.send(Event::Absolute(Absolute::Position(Position::X)), 0)?;
         self.device.send(Event::Absolute(Absolute::Position(Position::Y)), 0)?;
         self.device.synchronize()?;
