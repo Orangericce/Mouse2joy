@@ -316,13 +316,13 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
                         match code {
                             RelativeAxisCode::REL_X => {
                                 let mut s = state.lock().await;
-                                s.mouse_dx += event.value();
+                                // Only accumulate the scaled value — do NOT also add raw event.value(),
+                                // which would double-count movement.
                                 let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_x, deadzone);
                                 s.mouse_dx += scaled as i32;
                             }
                             RelativeAxisCode::REL_Y => {
                                 let mut s = state.lock().await;
-                                s.mouse_dy += event.value();
                                 let scaled = apply_sensitivity_and_deadzone(event.value() as f32, sensitivity_y, deadzone);
                                 s.mouse_dy += scaled as i32;
                             }
@@ -346,9 +346,12 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
                                     let mut s = state.lock().await;
                                     s.trigger_button = name.to_string();
                                     s.trigger_listening = false;
-                                    log::info!("Trigger binding captured: {}", name);
-                                    // Sync will happen via UI_TX on next poll
+                                    log::info!("Trigger binding captured: {} (code {})", name, event_code);
+                                } else {
+                                    log::info!("Rejected left/right click as trigger (code {})", event_code);
                                 }
+                            } else {
+                                log::debug!("Trigger listening: code {} not in bindable table", event_code);
                             }
                             continue;
                         }
