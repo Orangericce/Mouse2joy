@@ -209,43 +209,19 @@ fn poll_shared_state(state: &mut UiState, _now: f64, _tx: &mut Tx) -> bool {
 
 fn on_key(state: &mut UiState, event: &KeyEvent, _tx: &mut Tx) -> bool {
     if state.trigger_listening {
-        let key_name = match &event.key {
-            Key::Escape => "Not bound".to_string(),
-            Key::Text(t) if !t.is_empty() => t.to_uppercase(),
-            Key::Enter => "ENTER".to_string(),
-            Key::Tab => "TAB".to_string(),
-            Key::Backspace => "BACKSPACE".to_string(),
-            Key::Delete => "DELETE".to_string(),
-            Key::Left => "LEFT_ARROW".to_string(),
-            Key::Right => "RIGHT_ARROW".to_string(),
-            Key::Up => "UP_ARROW".to_string(),
-            Key::Down => "DOWN_ARROW".to_string(),
-            Key::Home => "HOME".to_string(),
-            Key::End => "END".to_string(),
-            Key::PageUp => "PAGE_UP".to_string(),
-            Key::PageDown => "PAGE_DOWN".to_string(),
-            Key::Insert => "INSERT".to_string(),
-            Key::PrintScreen => "PRINT_SCREEN".to_string(),
-            Key::ScrollLock => "SCROLL_LOCK".to_string(),
-            Key::Pause => "PAUSE".to_string(),
-            Key::Function(n) => format!("F{}", n),
-            Key::ContextMenu => "CONTEXT_MENU".to_string(),
-            Key::Command(c) => format!("CMD_{}", c.to_uppercase()),
-            Key::Modifier { .. } => return false, // Ignore modifier keys alone
-            _ => return false,
-        };
-        
-        // Left/right click cannot be trigger buttons
-        if key_name == "LEFT" || key_name == "RIGHT" || key_name == "LEFT_CLICK" || key_name == "RIGHT_CLICK" {
-            return false;
+        // Only Escape cancels trigger listening; mouse buttons are captured
+        // by the device reader in device_manager.rs, not via Rune's on_key.
+        match &event.key {
+            Key::Escape => {
+                state.trigger_button = "Not bound".to_string();
+                state.trigger_listening = false;
+                if let Some(tx) = UI_TX.get() {
+                    let _ = tx.send(state.clone().into());
+                }
+                true
+            }
+            _ => false, // Ignore all other keys; mouse buttons captured via evdev
         }
-        
-        state.trigger_button = key_name;
-        state.trigger_listening = false;
-        if let Some(tx) = UI_TX.get() {
-            let _ = tx.send(state.clone().into());
-        }
-        true
     } else {
         false
     }
@@ -629,22 +605,12 @@ fn create_trigger_button(
             .radius(8.0)
             .padding(8.0)
             .gap(2.0)
-            .child(text("Press a key, or pick a mouse button. Esc = Not bound.").font(SMALL_STYLE).color(text_secondary))
+            .child(text("Press a mouse button, or pick below. Esc = Not bound.").font(SMALL_STYLE).color(text_secondary))
             .child(trigger_option_row("Mouse Side (4)", "BTN_SIDE".to_string(), accent, text_secondary))
             .child(trigger_option_row("Mouse Forward (5)", "BTN_FORWARD".to_string(), accent, text_secondary))
             .child(trigger_option_row("Middle Click", "BTN_MIDDLE".to_string(), accent, text_secondary))
             .child(trigger_option_row("Mouse Extra (6)", "BTN_EXTRA".to_string(), accent, text_secondary))
             .child(trigger_option_row("Task Button", "BTN_TASK".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Space", "SPACE".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Enter", "ENTER".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Tab", "TAB".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Shift", "SHIFT".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Ctrl", "CTRL".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Alt", "ALT".to_string(), accent, text_secondary))
-            .child(trigger_option_row("F1", "F1".to_string(), accent, text_secondary))
-            .child(trigger_option_row("F2", "F2".to_string(), accent, text_secondary))
-            .child(trigger_option_row("F3", "F3".to_string(), accent, text_secondary))
-            .child(trigger_option_row("F4", "F4".to_string(), accent, text_secondary))
             .child(trigger_option_row("Not bound (Esc)", "Not bound".to_string(), accent, text_secondary));
         container = container.child(menu);
     }

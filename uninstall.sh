@@ -26,4 +26,8 @@ systemctl --user disable mouse2joy 2>/dev/null || true
 rm -f ~/.config/systemd/user/mouse2joy.service
 systemctl --user daemon-reload
 
+# Remove config directory
+log_info "Removing config directory..."
+rm -rf ~/.config/mouse2joy
+
 log_info "Uninstallation complete."
