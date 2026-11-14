@@ -10,14 +10,15 @@ use uinput::{device::Builder, Device as UinputDevice};
 
 /// Virtual joystick emulator using uinput.
 /// Creates a Linux joystick device and emits axis events based on mouse deltas.
+/// Includes spring-back centering (like the Python reference).
 pub struct JoystickEmulator {
     device: UinputDevice,
     // Joystick axis range (typically -32767 to 32767 for 16-bit)
     axis_min: i32,
     axis_max: i32,
-    // Current axis positions
-    x_pos: i32,
-    y_pos: i32,
+    // Current axis positions (float for smooth centering)
+    x_pos: f32,
+    y_pos: f32,
 }
 
 impl JoystickEmulator {
@@ -47,8 +48,8 @@ impl JoystickEmulator {
             device,
             axis_min: -32767,
             axis_max: 32767,
-            x_pos: 0,
-            y_pos: 0,
+            x_pos: 0.0,
+            y_pos: 0.0,
         })
     }
 
@@ -57,45 +58,60 @@ impl JoystickEmulator {
     /// The visual knob position ALWAYS reflects mouse movement (even when not grabbed),
     /// so the user can see which device is active. The virtual uinput device only
     /// emits axis values when grabbed.
+    /// Also applies spring-back centering (matching Python reference).
     pub async fn update(&mut self, state: Arc<Mutex<AppState>>, visual: &VisualState) {
-        let (dx, dy, grabbed, sensitivity_x, sensitivity_y) = {
+        let (dx, dy, grabbed, sensitivity_x, sensitivity_y, center_strength_x, center_strength_y, center_while_grabbed) = {
             let mut s = state.lock().await;
             let dx = s.mouse_dx;
             let dy = s.mouse_dy;
             // Reset deltas after reading
             s.mouse_dx = 0;
             s.mouse_dy = 0;
-            (dx, dy, s.grabbed, s.sensitivity_x, s.sensitivity_y)
+            (dx, dy, s.grabbed, s.sensitivity_x, s.sensitivity_y, s.center_strength_x, s.center_strength_y, s.center_while_grabbed)
         };
 
-        // Always accumulate mouse movement for visual display.
-        // This lets the user see joystick movement even when not grabbed,
-        // which helps identify the correct input device.
-        let scale = 100.0;
-        let new_x = (self.x_pos as f32 + dx as f32 * sensitivity_x * scale)
-            .clamp(self.axis_min as f32, self.axis_max as f32);
-        let new_y = (self.y_pos as f32 + dy as f32 * sensitivity_y * scale)
-            .clamp(self.axis_min as f32, self.axis_max as f32);
+        // Spring-back centering: always run centering if center_while_grabbed is true,
+        // or if not grabbed (centering kicks in after release).
+        // This matches Python: CENTER_WHILE_GRABBED = True means centering runs while grabbed too.
+        let should_center = center_while_grabbed || !grabbed;
 
-        self.x_pos = new_x as i32;
-        self.y_pos = new_y as i32;
+        if should_center {
+            // Apply spring-back: pull toward center by a fraction of the distance
+            // Python: state["x"] -= state["x"] * CENTER_STRENGTH_X
+            self.x_pos -= self.x_pos * center_strength_x;
+            self.y_pos -= self.y_pos * center_strength_y;
+        }
+
+        // Apply mouse deltas (only when grabbed, matching Python reference)
+        if grabbed {
+            let scale = 100.0;
+            self.x_pos += dx as f32 * sensitivity_x * scale;
+            self.y_pos += dy as f32 * sensitivity_y * scale;
+        }
+
+        // Clamp to axis range
+        self.x_pos = self.x_pos.clamp(self.axis_min as f32, self.axis_max as f32);
+        self.y_pos = self.y_pos.clamp(self.axis_min as f32, self.axis_max as f32);
 
         // Normalize to -1.0 to 1.0 for visualizer
-        let visual_x = new_x / 32767.0;
-        let visual_y = new_y / 32767.0;
+        let visual_x = self.x_pos / 32767.0;
+        let visual_y = self.y_pos / 32767.0;
 
         // Always update visual state with current position and grab status
         visual.set_knob(visual_x, visual_y);
         visual.set_grabbed(grabbed);
 
+        let x_int = self.x_pos as i32;
+        let y_int = self.y_pos as i32;
+
         if grabbed {
             // Emit axis events to the virtual uinput device
-            let _ = self.device.send(Event::Absolute(Absolute::Position(Position::X)), self.x_pos);
-            let _ = self.device.send(Event::Absolute(Absolute::Position(Position::Y)), self.y_pos);
+            let _ = self.device.send(Event::Absolute(Absolute::Position(Position::X)), x_int);
+            let _ = self.device.send(Event::Absolute(Absolute::Position(Position::Y)), y_int);
             let _ = self.device.synchronize();
         } else {
             // Keep virtual device centered when not grabbed,
-            // but the visual continues to show mouse movement.
+            // but the visual continues to show mouse movement (for device identification).
             let _ = self.device.send(Event::Absolute(Absolute::Position(Position::X)), 0);
             let _ = self.device.send(Event::Absolute(Absolute::Position(Position::Y)), 0);
             let _ = self.device.synchronize();
@@ -105,8 +121,8 @@ impl JoystickEmulator {
     /// Reset the accumulated position to center. Called when transitioning
     /// from grabbed to ungrabbed, so the visual starts fresh next grab.
     pub fn reset_position(&mut self) {
-        self.x_pos = 0;
-        self.y_pos = 0;
+        self.x_pos = 0.0;
+        self.y_pos = 0.0;
     }
 
     /// Press the trigger button on the virtual joystick
@@ -125,8 +141,8 @@ impl JoystickEmulator {
 
     /// Center the joystick axes
     pub fn center(&mut self) -> anyhow::Result<()> {
-        self.x_pos = 0;
-        self.y_pos = 0;
+        self.x_pos = 0.0;
+        self.y_pos = 0.0;
         self.device.send(Event::Absolute(Absolute::Position(Position::X)), 0)?;
         self.device.send(Event::Absolute(Absolute::Position(Position::Y)), 0)?;
         self.device.synchronize()?;
@@ -151,13 +167,10 @@ pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>, visual: &VisualS
             // Just grabbed - press trigger button
             let _ = emulator.press_trigger();
             if grab_audio {
-                // Audio will be played by the audio module
                 AudioPlayer::new().play_grab();
             }
         } else if !grabbed && last_grabbed {
-            // Just released - release trigger button and center virtual device.
-            // We do NOT reset the visual position so the user keeps seeing
-            // the last movement (helpful for identifying the correct device).
+            // Just released - release trigger button and center virtual device
             let _ = emulator.release_trigger();
             let _ = emulator.center();
             if release_audio {
@@ -166,10 +179,10 @@ pub async fn run_joystick_emulator(state: Arc<Mutex<AppState>>, visual: &VisualS
         }
         last_grabbed = grabbed;
 
-        // Update axes
+        // Update axes (includes spring-back centering)
         emulator.update(state.clone(), visual).await;
 
-        // Run at ~60Hz
+        // Run at ~60Hz (matches Python's CENTER_TICK_HZ = 60)
         sleep(Duration::from_millis(16)).await;
     }
 }

@@ -262,6 +262,7 @@ fn run_udev_monitor_blocking(tx: mpsc::UnboundedSender<Vec<String>>) -> anyhow::
 /// Mirrors the Python reference: uses `mouse.grab()`/`mouse.ungrab()` to
 /// exclusively capture the device when grabbed, and reads raw REL_X/REL_Y
 /// events to drive the virtual joystick axes.
+/// Only processes REL events when grabbed (matching Python reference).
 async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
     let mut current_device: Option<String> = None;
     let mut device: Option<Device> = None;
@@ -284,6 +285,14 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
             // Ungrab old device before dropping it
             if let Some(ref mut d) = device {
                 let _ = d.ungrab();
+            }
+            // Reset grab state when device changes (can't grab new device yet)
+            {
+                let mut s = state.lock().await;
+                if s.grabbed {
+                    log::info!("Device changed while grabbed — resetting grab state");
+                    s.grabbed = false;
+                }
             }
             current_device = new_path.clone();
             device = current_device.as_ref().and_then(|p| {
@@ -312,6 +321,14 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
             for event in events {
                 match event.event_type() {
                     EventType::RELATIVE => {
+                        // Only process REL events when grabbed (matching Python reference)
+                        let grabbed = {
+                            let s = state.lock().await;
+                            s.grabbed
+                        };
+                        if !grabbed {
+                            continue;
+                        }
                         let code = RelativeAxisCode(event.code());
                         match code {
                             RelativeAxisCode::REL_X => {
@@ -356,7 +373,7 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
                             continue;
                         }
                         
-                        // Normal trigger handling (toggle grab)
+                        // Normal trigger handling (toggle grab) - only on button PRESS (value == 1)
                         if let Some(target_code) = parse_trigger_key_code(&trigger_button) {
                             if event_code == target_code && event.value() == 1 {
                                 // Key down - toggle grabbed state
@@ -367,6 +384,8 @@ async fn run_mouse_reader(state: Arc<Mutex<AppState>>) {
                                 if new_grabbed {
                                     if let Err(e) = dev.grab() {
                                         log::warn!("Failed to grab device: {}", e);
+                                        // Revert grab state on failure
+                                        s.grabbed = false;
                                     } else {
                                         log::info!("Grabbed device: {:?}", current_device);
                                     }

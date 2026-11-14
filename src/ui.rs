@@ -69,6 +69,10 @@ pub struct UiState {
     pub device_list: Vec<String>,
     pub trigger_listening: bool,
     pub device_dropdown_open: bool,
+    // Spring-back centering (matches Python reference)
+    pub center_strength_x: f32,
+    pub center_strength_y: f32,
+    pub center_while_grabbed: bool,
     // Runtime state from shared AppState
     pub grabbed: bool,
     pub mouse_dx: i32,
@@ -92,6 +96,9 @@ impl Default for UiState {
             device_list: Vec::new(),
             trigger_listening: false,
             device_dropdown_open: false,
+            center_strength_x: 0.04,
+            center_strength_y: 0.02,
+            center_while_grabbed: true,
             grabbed: false,
             mouse_dx: 0,
             mouse_dy: 0,
@@ -130,6 +137,9 @@ impl From<AppState> for UiState {
             device_list: Vec::new(),
             trigger_listening: state.trigger_listening,
             device_dropdown_open: false,
+            center_strength_x: state.center_strength_x,
+            center_strength_y: state.center_strength_y,
+            center_while_grabbed: state.center_while_grabbed,
             grabbed: state.grabbed,
             mouse_dx: state.mouse_dx,
             mouse_dy: state.mouse_dy,
@@ -150,6 +160,9 @@ impl From<UiState> for AppState {
             minimize_to_tray: ui.system_tray_enabled,
             grab_audio_enabled: ui.grab_audio_enabled,
             release_audio_enabled: ui.release_audio_enabled,
+            center_strength_x: ui.center_strength_x,
+            center_strength_y: ui.center_strength_y,
+            center_while_grabbed: ui.center_while_grabbed,
             grabbed: ui.grabbed,
             mouse_dx: 0,
             mouse_dy: 0,
@@ -290,6 +303,10 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
                     "System Tray", state.system_tray_enabled,
                     text_primary, text_secondary, toggle_on, toggle_off,
                 ))
+                .child(create_toggle(
+                    "Center While Grabbed", state.center_while_grabbed,
+                    text_primary, text_secondary, toggle_on, toggle_off,
+                ))
         );
 
     // Right side: Sensitivity settings (top) + Config (bottom)
@@ -312,6 +329,14 @@ fn view(state: &UiState, _cx: &mut Cx<UiState>) -> El {
                 ))
                 .child(create_slider(
                     "Deadzone", state.deadzone,
+                    text_primary, text_secondary, accent, slider_track, slider_knob,
+                ))
+                .child(create_slider(
+                    "Center Strength X", state.center_strength_x,
+                    text_primary, text_secondary, accent, slider_track, slider_knob,
+                ))
+                .child(create_slider(
+                    "Center Strength Y", state.center_strength_y,
                     text_primary, text_secondary, accent, slider_track, slider_knob,
                 ))
         )
@@ -515,6 +540,8 @@ fn create_slider(
                         "x_sensitivity" => s.sensitivity_x = new_value,
                         "y_sensitivity" => s.sensitivity_y = new_value,
                         "deadzone" => s.deadzone = new_value,
+                        "center_strength_x" => s.center_strength_x = new_value,
+                        "center_strength_y" => s.center_strength_y = new_value,
                         _ => {}
                     }
                     // Sync to shared AppState on each drag update
@@ -667,6 +694,7 @@ fn create_toggle(
                         "grab_audio_cue" => s.grab_audio_enabled = !s.grab_audio_enabled,
                         "release_audio_cue" => s.release_audio_enabled = !s.release_audio_enabled,
                         "system_tray" => s.system_tray_enabled = !s.system_tray_enabled,
+                        "center_while_grabbed" => s.center_while_grabbed = !s.center_while_grabbed,
                         _ => {}
                     }
                     // Sync to shared AppState
@@ -717,6 +745,9 @@ fn create_button(
                             s.release_audio_enabled = cfg.release_audio_enabled;
                             s.system_tray_enabled = cfg.minimize_to_tray;
                             s.device_path = cfg.device_path;
+                            s.center_strength_x = cfg.center_strength_x;
+                            s.center_strength_y = cfg.center_strength_y;
+                            s.center_while_grabbed = cfg.center_while_grabbed;
                             // Sync to shared AppState
                             if let Some(tx) = UI_TX.get() {
                                 let _ = tx.send(s.clone().into());
@@ -737,6 +768,9 @@ fn create_button(
                             minimize_to_tray: s.system_tray_enabled,
                             grab_audio_enabled: s.grab_audio_enabled,
                             release_audio_enabled: s.release_audio_enabled,
+                            center_strength_x: s.center_strength_x,
+                            center_strength_y: s.center_strength_y,
+                            center_while_grabbed: s.center_while_grabbed,
                         };
                         let _ = save_config_to_path(&cfg, &path);
                     }

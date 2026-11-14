@@ -23,12 +23,22 @@ pub struct Config {
     pub grab_audio_enabled: bool,
     #[serde(default = "default_audio_enabled")]
     pub release_audio_enabled: bool,
+    // Spring-back centering (matches Python reference)
+    #[serde(default = "default_center_strength_x")]
+    pub center_strength_x: f32,
+    #[serde(default = "default_center_strength_y")]
+    pub center_strength_y: f32,
+    #[serde(default = "default_center_while_grabbed")]
+    pub center_while_grabbed: bool,
 }
 
 fn default_sensitivity() -> f32 { 1.0 }
 fn default_deadzone() -> f32 { 0.05 }
 fn default_trigger_button() -> String { "Not bound".to_string() }
 fn default_audio_enabled() -> bool { true }
+fn default_center_strength_x() -> f32 { 0.04 }  // Python: CENTER_STRENGTH_X = 0.04
+fn default_center_strength_y() -> f32 { 0.02 }  // Python: CENTER_STRENGTH_Y = 0.02
+fn default_center_while_grabbed() -> bool { true }  // Python: CENTER_WHILE_GRABBED = True
 
 impl Default for Config {
     fn default() -> Self {
@@ -41,6 +51,9 @@ impl Default for Config {
             minimize_to_tray: false,
             grab_audio_enabled: true,
             release_audio_enabled: true,
+            center_strength_x: 0.04,
+            center_strength_y: 0.02,
+            center_while_grabbed: true,
         }
     }
 }

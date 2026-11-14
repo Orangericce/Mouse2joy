@@ -11,6 +11,10 @@ pub struct AppState {
     pub minimize_to_tray: bool,
     pub grab_audio_enabled: bool,
     pub release_audio_enabled: bool,
+    // Spring-back centering (matches Python reference)
+    pub center_strength_x: f32,
+    pub center_strength_y: f32,
+    pub center_while_grabbed: bool,
 
     // Runtime state
     pub grabbed: bool,
@@ -31,6 +35,9 @@ impl AppState {
             minimize_to_tray: cfg.minimize_to_tray,
             grab_audio_enabled: cfg.grab_audio_enabled,
             release_audio_enabled: cfg.release_audio_enabled,
+            center_strength_x: cfg.center_strength_x,
+            center_strength_y: cfg.center_strength_y,
+            center_while_grabbed: cfg.center_while_grabbed,
             grabbed: false,
             mouse_dx: 0,
             mouse_dy: 0,
@@ -49,6 +56,9 @@ impl AppState {
             minimize_to_tray: self.minimize_to_tray,
             grab_audio_enabled: self.grab_audio_enabled,
             release_audio_enabled: self.release_audio_enabled,
+            center_strength_x: self.center_strength_x,
+            center_strength_y: self.center_strength_y,
+            center_while_grabbed: self.center_while_grabbed,
         }
     }
 
