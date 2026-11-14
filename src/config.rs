@@ -16,7 +16,9 @@ pub struct Config {
     #[serde(default = "default_deadzone")]
     pub deadzone: f32,
     #[serde(default = "default_trigger_button")]
-    pub trigger_button: String,
+    pub trigger_button: String,  // Display name (for backward compat)
+    #[serde(default)]
+    pub trigger_code: Option<u16>,  // Actual raw evdev code (source of truth)
     #[serde(default)]
     pub minimize_to_tray: bool,
     #[serde(default = "default_audio_enabled")]
@@ -47,7 +49,8 @@ impl Default for Config {
             sensitivity_x: 1.0,
             sensitivity_y: 1.0,
             deadzone: 0.05,
-            trigger_button: "BTN_LEFT".to_string(),
+            trigger_button: "Not bound".to_string(),
+            trigger_code: None,
             minimize_to_tray: false,
             grab_audio_enabled: true,
             release_audio_enabled: true,

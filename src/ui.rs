@@ -62,6 +62,7 @@ pub struct UiState {
     pub sensitivity_y: f32,
     pub deadzone: f32,
     pub trigger_button: String,
+    pub trigger_code: Option<u16>,
     pub grab_audio_enabled: bool,
     pub release_audio_enabled: bool,
     pub system_tray_enabled: bool,
@@ -89,6 +90,7 @@ impl Default for UiState {
             sensitivity_y: 1.0,
             deadzone: 0.05,
             trigger_button: "Not bound".to_string(),
+            trigger_code: None,
             grab_audio_enabled: true,
             release_audio_enabled: true,
             system_tray_enabled: false,
@@ -130,6 +132,7 @@ impl From<AppState> for UiState {
             sensitivity_y: state.sensitivity_y,
             deadzone: state.deadzone,
             trigger_button: state.trigger_button,
+            trigger_code: state.trigger_code,
             grab_audio_enabled: state.grab_audio_enabled,
             release_audio_enabled: state.release_audio_enabled,
             system_tray_enabled: state.minimize_to_tray,
@@ -157,6 +160,7 @@ impl From<UiState> for AppState {
             sensitivity_y: ui.sensitivity_y,
             deadzone: ui.deadzone,
             trigger_button: ui.trigger_button,
+            trigger_code: ui.trigger_code,
             minimize_to_tray: ui.system_tray_enabled,
             grab_audio_enabled: ui.grab_audio_enabled,
             release_audio_enabled: ui.release_audio_enabled,
@@ -633,26 +637,27 @@ fn create_trigger_button(
             .padding(8.0)
             .gap(2.0)
             .child(text("Press a mouse button, or pick below. Esc = Not bound.").font(SMALL_STYLE).color(text_secondary))
-            .child(trigger_option_row("Mouse Side (4)", "BTN_SIDE".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Mouse Forward (5)", "BTN_FORWARD".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Middle Click", "BTN_MIDDLE".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Mouse Extra (6)", "BTN_EXTRA".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Task Button", "BTN_TASK".to_string(), accent, text_secondary))
-            .child(trigger_option_row("Not bound (Esc)", "Not bound".to_string(), accent, text_secondary));
+            .child(trigger_option_row("Mouse Side (4)", "BTN_SIDE".to_string(), 0x113, accent, text_secondary))
+            .child(trigger_option_row("Mouse Forward (5)", "BTN_FORWARD".to_string(), 0x115, accent, text_secondary))
+            .child(trigger_option_row("Middle Click", "BTN_MIDDLE".to_string(), 0x112, accent, text_secondary))
+            .child(trigger_option_row("Mouse Extra (6)", "BTN_EXTRA".to_string(), 0x114, accent, text_secondary))
+            .child(trigger_option_row("Task Button", "BTN_TASK".to_string(), 0x117, accent, text_secondary))
+            .child(trigger_option_row("Not bound (Esc)", "Not bound".to_string(), 0, accent, text_secondary));
         container = container.child(menu);
     }
 
     container
 }
 
-fn trigger_option_row(label: &str, value: String, accent: Color, _text_secondary: Color) -> El {
+fn trigger_option_row(label: &str, display_name: String, code: u16, accent: Color, _text_secondary: Color) -> El {
     el()
         .w_full()
         .h(32.0)
         .center_y()
         .px(8.0)
         .on_press(move |s: &mut UiState| {
-            s.trigger_button = value.clone();
+            s.trigger_button = display_name.clone();
+            s.trigger_code = if code == 0 { None } else { Some(code) };
             s.trigger_listening = false;
             // Sync to shared AppState
             if let Some(tx) = UI_TX.get() {
@@ -741,6 +746,7 @@ fn create_button(
                             s.sensitivity_y = cfg.sensitivity_y;
                             s.deadzone = cfg.deadzone;
                             s.trigger_button = cfg.trigger_button;
+                            s.trigger_code = cfg.trigger_code;
                             s.grab_audio_enabled = cfg.grab_audio_enabled;
                             s.release_audio_enabled = cfg.release_audio_enabled;
                             s.system_tray_enabled = cfg.minimize_to_tray;
@@ -765,6 +771,7 @@ fn create_button(
                             sensitivity_y: s.sensitivity_y,
                             deadzone: s.deadzone,
                             trigger_button: s.trigger_button.clone(),
+                            trigger_code: s.trigger_code,
                             minimize_to_tray: s.system_tray_enabled,
                             grab_audio_enabled: s.grab_audio_enabled,
                             release_audio_enabled: s.release_audio_enabled,

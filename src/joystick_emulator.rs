@@ -16,9 +16,12 @@ pub struct JoystickEmulator {
     // Joystick axis range (typically -32767 to 32767 for 16-bit)
     axis_min: i32,
     axis_max: i32,
-    // Current axis positions (float for smooth centering)
+    // Current axis positions (float for smooth centering) - used for uinput
     x_pos: f32,
     y_pos: f32,
+    // Visual position - always tracks mouse movement for UI display, even when not grabbed
+    visual_x: f32,
+    visual_y: f32,
 }
 
 impl JoystickEmulator {
@@ -50,6 +53,8 @@ impl JoystickEmulator {
             axis_max: 32767,
             x_pos: 0.0,
             y_pos: 0.0,
+            visual_x: 0.0,
+            visual_y: 0.0,
         })
     }
 
@@ -70,9 +75,17 @@ impl JoystickEmulator {
             (dx, dy, s.grabbed, s.sensitivity_x, s.sensitivity_y, s.center_strength_x, s.center_strength_y, s.center_while_grabbed)
         };
 
-        // Spring-back centering: always run centering if center_while_grabbed is true,
-        // or if not grabbed (centering kicks in after release).
-        // This matches Python: CENTER_WHILE_GRABBED = True means centering runs while grabbed too.
+        // Always apply mouse deltas to visual position (for UI display, even when not grabbed)
+        // This lets the user see mouse movement to identify the correct device
+        let scale = 100.0;
+        self.visual_x += dx as f32 * sensitivity_x * scale;
+        self.visual_y += dy as f32 * sensitivity_y * scale;
+        // Clamp visual position to axis range
+        self.visual_x = self.visual_x.clamp(self.axis_min as f32, self.axis_max as f32);
+        self.visual_y = self.visual_y.clamp(self.axis_min as f32, self.axis_max as f32);
+
+        // Spring-back centering for actual joystick position (uinput)
+        // Runs when center_while_grabbed is true, or when not grabbed
         let should_center = center_while_grabbed || !grabbed;
 
         if should_center {
@@ -82,22 +95,21 @@ impl JoystickEmulator {
             self.y_pos -= self.y_pos * center_strength_y;
         }
 
-        // Apply mouse deltas (only when grabbed, matching Python reference)
+        // Apply mouse deltas to actual joystick position (only when grabbed, matching Python reference)
         if grabbed {
-            let scale = 100.0;
             self.x_pos += dx as f32 * sensitivity_x * scale;
             self.y_pos += dy as f32 * sensitivity_y * scale;
         }
 
-        // Clamp to axis range
+        // Clamp actual position to axis range
         self.x_pos = self.x_pos.clamp(self.axis_min as f32, self.axis_max as f32);
         self.y_pos = self.y_pos.clamp(self.axis_min as f32, self.axis_max as f32);
 
-        // Normalize to -1.0 to 1.0 for visualizer
-        let visual_x = self.x_pos / 32767.0;
-        let visual_y = self.y_pos / 32767.0;
+        // Normalize visual position to -1.0 to 1.0 for visualizer
+        let visual_x = self.visual_x / 32767.0;
+        let visual_y = self.visual_y / 32767.0;
 
-        // Always update visual state with current position and grab status
+        // Always update visual state with visual position and grab status
         visual.set_knob(visual_x, visual_y);
         visual.set_grabbed(grabbed);
 
@@ -110,8 +122,7 @@ impl JoystickEmulator {
             let _ = self.device.send(Event::Absolute(Absolute::Position(Position::Y)), y_int);
             let _ = self.device.synchronize();
         } else {
-            // Keep virtual device centered when not grabbed,
-            // but the visual continues to show mouse movement (for device identification).
+            // Keep virtual device centered when not grabbed
             let _ = self.device.send(Event::Absolute(Absolute::Position(Position::X)), 0);
             let _ = self.device.send(Event::Absolute(Absolute::Position(Position::Y)), 0);
             let _ = self.device.synchronize();
@@ -123,6 +134,8 @@ impl JoystickEmulator {
     pub fn reset_position(&mut self) {
         self.x_pos = 0.0;
         self.y_pos = 0.0;
+        self.visual_x = 0.0;
+        self.visual_y = 0.0;
     }
 
     /// Press the trigger button on the virtual joystick
@@ -143,6 +156,8 @@ impl JoystickEmulator {
     pub fn center(&mut self) -> anyhow::Result<()> {
         self.x_pos = 0.0;
         self.y_pos = 0.0;
+        self.visual_x = 0.0;
+        self.visual_y = 0.0;
         self.device.send(Event::Absolute(Absolute::Position(Position::X)), 0)?;
         self.device.send(Event::Absolute(Absolute::Position(Position::Y)), 0)?;
         self.device.synchronize()?;

@@ -7,7 +7,8 @@ pub struct AppState {
     pub sensitivity_x: f32,
     pub sensitivity_y: f32,
     pub deadzone: f32,
-    pub trigger_button: String,
+    pub trigger_button: String,      // Display name
+    pub trigger_code: Option<u16>,   // Actual raw evdev code (source of truth)
     pub minimize_to_tray: bool,
     pub grab_audio_enabled: bool,
     pub release_audio_enabled: bool,
@@ -32,6 +33,7 @@ impl AppState {
             sensitivity_y: cfg.sensitivity_y,
             deadzone: cfg.deadzone,
             trigger_button: cfg.trigger_button,
+            trigger_code: cfg.trigger_code,
             minimize_to_tray: cfg.minimize_to_tray,
             grab_audio_enabled: cfg.grab_audio_enabled,
             release_audio_enabled: cfg.release_audio_enabled,
@@ -53,6 +55,7 @@ impl AppState {
             sensitivity_y: self.sensitivity_y,
             deadzone: self.deadzone,
             trigger_button: self.trigger_button.clone(),
+            trigger_code: self.trigger_code,
             minimize_to_tray: self.minimize_to_tray,
             grab_audio_enabled: self.grab_audio_enabled,
             release_audio_enabled: self.release_audio_enabled,
