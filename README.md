@@ -139,8 +139,6 @@ This project is licensed under the MIT License – see the `LICENSE` file for de
 
 ---
 
-*Generated with ❤️ by the mouse2joy team.*
-
 ## Quick Links
 
 - Repository: https://github.com/Orangericce/mouse2joy
